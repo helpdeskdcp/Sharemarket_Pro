@@ -502,3 +502,16 @@ export interface PriceActionBacktestResult {
   trades: PriceActionBacktestTrade[];
 }
 
+export type UserRole = 'ADMINISTRATOR' | 'DEMO_USER';
+
+export interface UserSession {
+  username: string;
+  email?: string;
+  name: string;
+  role: UserRole;
+  isUnlimited: boolean;
+  loginTime: string;
+  authProvider: 'ADMIN_CREDENTIALS' | 'FIREBASE_GOOGLE' | 'GMAIL_AUTO';
+  photoURL?: string;
+}
+

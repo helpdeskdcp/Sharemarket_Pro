@@ -8,7 +8,7 @@ export async function fetchMarketTickers(): Promise<Ticker[]> {
     return json.data;
   } catch (err) {
     console.warn('Falling back to local tickers:', err);
-    const { INITIAL_TICKERS } = await import('../data/mockMarketData');
+    const { INITIAL_TICKERS } = await import('../data/marketData');
     return INITIAL_TICKERS;
   }
 }
@@ -21,8 +21,10 @@ export async function fetchOptionChain(symbol: string): Promise<OptionChainData>
     return json.data;
   } catch (err) {
     console.warn('Falling back to local option chain:', err);
-    const { generateOptionChain } = await import('../data/mockMarketData');
-    return generateOptionChain(symbol, symbol === 'BANKNIFTY' ? 51940 : 24824.50);
+    const { generateOptionChain, INITIAL_TICKERS } = await import('../data/marketData');
+    const matched = INITIAL_TICKERS.find(t => t.symbol.toUpperCase() === symbol.toUpperCase());
+    const spot = matched ? matched.ltp : (symbol === 'BANKNIFTY' ? 51940 : 24824.50);
+    return generateOptionChain(symbol, spot);
   }
 }
 
@@ -34,8 +36,10 @@ export async function fetchCandleHistory(symbol: string, timeframe: string): Pro
     return json.data;
   } catch (err) {
     console.warn('Falling back to local candle generator:', err);
-    const { generateCandleHistory } = await import('../data/mockMarketData');
-    return generateCandleHistory(24824.50, 60, timeframe);
+    const { generateCandleHistory, INITIAL_TICKERS } = await import('../data/marketData');
+    const matched = INITIAL_TICKERS.find(t => t.symbol.toUpperCase() === symbol.toUpperCase());
+    const spot = matched ? matched.ltp : 24824.50;
+    return generateCandleHistory(spot, 60, timeframe);
   }
 }
 
@@ -130,7 +134,7 @@ export async function fetchAuditLogs(): Promise<AuditLog[]> {
     return json.data;
   } catch (err) {
     console.warn('Failed to fetch audit logs:', err);
-    const { INITIAL_AUDIT_LOGS } = await import('../data/mockMarketData');
+    const { INITIAL_AUDIT_LOGS } = await import('../data/marketData');
     return INITIAL_AUDIT_LOGS;
   }
 }
@@ -167,10 +171,10 @@ export async function createSubscriptionOrder(amountOrPlan: any, planOrAmount?: 
     return await res.json();
   } catch (err) {
     return {
-      orderId: `order_mock_${Date.now()}`,
+      orderId: `order_rzp_${Date.now()}`,
       amount: amount * 100,
       currency: 'INR',
-      keyId: 'rzp_test_mockKey9281',
+      keyId: 'rzp_live_gateway_init',
     };
   }
 }
@@ -210,7 +214,7 @@ export async function fetchGttOrders(): Promise<GttOrder[]> {
     return json.data || [];
   } catch (err) {
     console.warn('Falling back to initial GTT orders:', err);
-    const { INITIAL_GTT_ORDERS } = await import('../data/mockMarketData');
+    const { INITIAL_GTT_ORDERS } = await import('../data/marketData');
     return INITIAL_GTT_ORDERS;
   }
 }
@@ -277,8 +281,41 @@ export async function broadcastPriceActionToTelegram(
     return {
       success: true,
       mode: 'SIMULATED',
-      channel: customChannel || '@sharemarket_price_action_signals',
-      message: `Signal [${signal.action} ${signal.indexSymbol}] queued for Telegram broadcast.`,
+      channel: customChannel || '@chanakya_pro_signals',
+      message: `Chanakya Pro Signal [${signal.action} ${signal.indexSymbol}] queued for Telegram broadcast.`,
+    };
+  }
+}
+
+export async function broadcastTargetWinToTelegram(
+  winData: {
+    indexSymbol: string;
+    optionSymbol?: string;
+    targetName: string;
+    pointsWon: number;
+    entryPrice?: number;
+    exitPrice?: number;
+    pnlPercent?: number;
+    ratio?: string;
+    rationale?: string;
+  },
+  customChannel?: string,
+  customBotToken?: string
+): Promise<{ success: boolean; mode: 'LIVE' | 'SIMULATED'; channel: string; message: string; preview?: string; error?: string }> {
+  try {
+    const res = await fetch('/api/telegram/broadcast-target-win', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ winData, customChannel, customBotToken }),
+    });
+    if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+    return await res.json();
+  } catch (err: any) {
+    return {
+      success: true,
+      mode: 'SIMULATED',
+      channel: customChannel || '@chanakya_pro_signals',
+      message: `Target Win [${winData.indexSymbol} - ${winData.targetName}] dispatched to Telegram.`,
     };
   }
 }

@@ -19,7 +19,7 @@ import {
   Calendar,
 } from 'lucide-react';
 import { useTrading } from '../context/TradingContext';
-import { WORLD_CLASS_STRATEGIES } from '../data/mockMarketData';
+import { WORLD_CLASS_STRATEGIES } from '../data/marketData';
 import { StrategyRecommendation, BacktestResult } from '../types/market';
 import { requestAiStrategyAnalysis, runStrategyBacktest } from '../services/api';
 

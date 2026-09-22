@@ -6,7 +6,7 @@ import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
 import * as OTPAuth from 'otpauth';
-import { INITIAL_TICKERS, generateOptionChain, generateCandleHistory, WORLD_CLASS_STRATEGIES, INITIAL_AUDIT_LOGS, INITIAL_GTT_ORDERS, DEFAULT_WEBHOOK_SETTINGS, DEFAULT_ENGINE_SETTINGS } from './src/data/mockMarketData';
+import { INITIAL_TICKERS, generateOptionChain, generateCandleHistory, WORLD_CLASS_STRATEGIES, INITIAL_AUDIT_LOGS, INITIAL_GTT_ORDERS, DEFAULT_WEBHOOK_SETTINGS, DEFAULT_ENGINE_SETTINGS } from './src/data/marketData';
 import { AuditLog, DeveloperSettings, GttOrder, BacktestResult, AlertWebhookSettings, Ticker } from './src/types/market';
 import { AngelOneLiveStreamer, EXCHANGE_SYMBOL_MAP } from './src/services/angelOneLiveService';
 import { PriceActionStrategyEngine } from './src/services/priceActionEngine';
@@ -180,15 +180,111 @@ app.get('/api/market/option-chain', (req: Request, res: Response) => {
   res.json({ success: true, data: optionChain });
 });
 
-// Candle History Endpoint
-app.get('/api/market/candles', (req: Request, res: Response) => {
+// Helper to fetch live candle history from exchange gateways
+async function fetchLiveCandleHistory(symbol: string, timeframe: string): Promise<any[] | null> {
+  const meta = EXCHANGE_SYMBOL_MAP[symbol.toUpperCase()];
+  if (!meta) return null;
+
+  let interval = '5m';
+  let range = '1d';
+  if (timeframe === '1D') {
+    interval = '5m';
+    range = '1d';
+  } else if (timeframe === '1W') {
+    interval = '15m';
+    range = '5d';
+  } else if (timeframe === '1M') {
+    interval = '1d';
+    range = '1mo';
+  } else if (timeframe === '1Y') {
+    interval = '1wk';
+    range = '1y';
+  }
+
+  try {
+    const res = await fetch(
+      `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(meta.yahooSymbol)}?interval=${interval}&range=${range}`,
+      { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' } }
+    );
+    if (!res.ok) return null;
+    const json: any = await res.json();
+    const result = json?.chart?.result?.[0];
+    if (!result) return null;
+
+    const timestamps = result.timestamp || [];
+    const quote = result.indicators?.quote?.[0] || {};
+    const opens = quote.open || [];
+    const highs = quote.high || [];
+    const lows = quote.low || [];
+    const closes = quote.close || [];
+    const volumes = quote.volume || [];
+
+    const candles: any[] = [];
+    const ticker = serverLiveTickers.find(t => t.symbol.toUpperCase() === symbol.toUpperCase());
+
+    // Scaling ratio for MCX if USD-spot
+    let scaleRatio = 1;
+    if (meta.exchange === 'MCX' && ticker && closes[closes.length - 1] && closes[closes.length - 1] < ticker.ltp * 0.2) {
+      scaleRatio = ticker.ltp / (closes[closes.length - 1] || 1);
+    }
+
+    for (let i = 0; i < timestamps.length; i++) {
+      if (closes[i] !== null && closes[i] !== undefined) {
+        const o = Number((opens[i] * scaleRatio).toFixed(2));
+        const h = Number((highs[i] * scaleRatio).toFixed(2));
+        const l = Number((lows[i] * scaleRatio).toFixed(2));
+        const c = Number((closes[i] * scaleRatio).toFixed(2));
+        const v = Number(volumes[i] || 1000);
+        const timeStr = new Date(timestamps[i] * 1000).toLocaleTimeString('en-IN', {
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false,
+          timeZone: 'Asia/Kolkata',
+        });
+        candles.push({
+          time: timeStr,
+          open: o,
+          high: Math.max(h, o, c),
+          low: Math.min(l, o, c),
+          close: c,
+          volume: v,
+        });
+      }
+    }
+
+    if (candles.length > 5) {
+      // Calculate 20 EMA
+      const k20 = 2 / (20 + 1);
+      let ema20 = candles[0].close;
+      for (let i = 0; i < candles.length; i++) {
+        ema20 = candles[i].close * k20 + ema20 * (1 - k20);
+        candles[i].ema20 = Number(ema20.toFixed(2));
+      }
+      return candles;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+// Candle History Endpoint with Live Exchange History & Quant Fallback
+app.get('/api/market/candles', async (req: Request, res: Response) => {
   const symbol = (req.query.symbol as string) || 'NIFTY 50';
   const timeframe = (req.query.timeframe as string) || '1D';
   const points = timeframe === '1D' ? 60 : timeframe === '1W' ? 80 : timeframe === '1M' ? 90 : 120;
   
   const ticker = serverLiveTickers.find(t => t.symbol.toUpperCase() === symbol.toUpperCase()) || serverLiveTickers[0];
-  const candles = generateCandleHistory(ticker.ltp, points, timeframe);
-  res.json({ success: true, symbol: ticker.symbol, timeframe, data: candles });
+  const liveCandles = await fetchLiveCandleHistory(symbol, timeframe);
+  const candles = liveCandles || generateCandleHistory(ticker.ltp, points, timeframe);
+  
+  res.json({
+    success: true,
+    symbol: ticker.symbol,
+    timeframe,
+    source: liveCandles ? 'EXCHANGE_LIVE_HISTORY' : 'QUANT_FALLBACK',
+    data: candles,
+  });
 });
 
 // AI Market Regime & Probabilistic Strategy Advisor
@@ -808,13 +904,6 @@ function formatPriceActionSignalTelegramHtml(signal: any, channelName?: string):
   const signalEmoji = isBuy ? '🟢 🚀' : '🔴 🔻';
   const actionLabel = isBuy ? 'BUY / LONG CALL' : 'SELL / SHORT PUT';
 
-  let patternTitle = 'PRICE ACTION BREAKOUT';
-  if (signal.pattern === 'RESISTANCE_BREAKOUT') patternTitle = 'RESISTANCE BREAKOUT 💥';
-  else if (signal.pattern === 'SUPPORT_BREAKDOWN') patternTitle = 'SUPPORT BREAKDOWN ⚡';
-  else if (signal.pattern === 'DOUBLE_BOTTOM_REVERSAL') patternTitle = 'DOUBLE BOTTOM REVERSAL 🔄';
-  else if (signal.pattern === 'FAKEOUT_TRAP_REVERSAL') patternTitle = 'FAKEOUT TRAP REVERSAL 🪤';
-  else if (signal.pattern === 'TRENDLINE_BREAKOUT') patternTitle = 'TRENDLINE BREAKOUT 📈';
-
   const cmp = Number(signal.entryPrice || signal.currentPrice || 0).toFixed(2);
   const sl = Number(signal.stopLoss || 0).toFixed(2);
   const t1 = signal.targets?.t1 ? Number(signal.targets.t1).toFixed(2) : '-';
@@ -825,8 +914,7 @@ function formatPriceActionSignalTelegramHtml(signal: any, channelName?: string):
   return `
 <b>${signalEmoji} ${actionLabel} - ${signal.indexSymbol || 'NIFTY 50'}</b>
 ━━━━━━━━━━━━━━━━━━━━━
-📊 <b>Pattern:</b> ${patternTitle}
-🎯 <b>Signal Type:</b> ${signal.type || 'S/R BREAKOUT'}
+🎯 <b>Signal Type:</b> BREAKOUT
 💎 <b>Conviction:</b> ${signal.probabilityPercent || 88}% High Probability
 ⚡ <b>Volume Surge:</b> ${signal.volumeMultiplier || 2.4}x vs 20-EMA
 
@@ -840,11 +928,37 @@ function formatPriceActionSignalTelegramHtml(signal: any, channelName?: string):
 • <b>Risk-to-Reward:</b> ${signal.riskRewardRatio || '1:2.5'}
 
 💡 <b>Strategy Rationale:</b>
-${signal.rationale || 'High-volume breakout confirmed across structural key resistance level with clean multi-bar momentum.'}
+${signal.rationale || 'High-volume breakout confirmed across key structural level with clean momentum.'}
 
 ━━━━━━━━━━━━━━━━━━━━━
-🕒 <i>Time: ${new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })} IST | ${channelName || devSettings.webhooks?.telegram?.channelName || 'ShareMarket Pro Price Action'}</i>
-⚠️ <i>SEBI Statutory Notice: Dispatched for algorithmic simulation & research. Options/Futures carry high capital risk.</i>
+🕒 <i>Time: ${new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })} IST | ${channelName || devSettings.webhooks?.telegram?.channelName || 'Chanakya Pro Broadcast'}</i>
+⚠️ <i>SEBI Statutory Notice: We are NOT SEBI registered. Dispatched for algorithmic simulation & research. Options/Futures carry high capital risk.</i>
+`.trim();
+}
+
+function formatTargetWinTelegramHtml(winData: any, channelName?: string): string {
+  const targetLabel = winData.targetName || 'TARGET 1 HIT 🎯';
+  const symbol = winData.indexSymbol || winData.symbol || 'CRUDEOIL';
+  const optionSymbol = winData.optionSymbol || `${symbol} OPTION`;
+  const pointsWon = Number(winData.pointsWon || winData.pointsCaptured || 0).toFixed(2);
+  const pnlPercent = Number(winData.pnlPercent || 28.5).toFixed(2);
+  const entryPrice = winData.entryPrice ? Number(winData.entryPrice).toFixed(2) : '-';
+  const exitPrice = winData.exitPrice ? Number(winData.exitPrice).toFixed(2) : '-';
+  const ratio = winData.ratio || '1:2.0';
+
+  return `
+<b>🏆 🎯 CHANAKYA PRO — TARGET HIT & WIN! 🚀</b>
+━━━━━━━━━━━━━━━━━━━━━
+⚡ <b>Symbol / Contract:</b> ${symbol}
+📊 <b>Option Strike:</b> ${optionSymbol}
+🎯 <b>Achievement:</b> ${targetLabel} (+${pointsWon} PTS)
+📈 <b>P&L Return:</b> +${pnlPercent}% Profit (R:R ${ratio})
+📍 <b>Execution:</b> Entry ₹${entryPrice} ➔ Target Hit ₹${exitPrice}
+🛡️ <b>Trade Action:</b> Book 50% Profits & Trail Stop-Loss to Cost!
+💡 <b>Rationale:</b> ${winData.rationale || 'Key price momentum breakout target reached with exceptional accuracy.'}
+━━━━━━━━━━━━━━━━━━━━━
+🕒 <i>Time: ${new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })} IST | ${channelName || devSettings.webhooks?.telegram?.channelName || 'Chanakya Pro VIP Broadcast'}</i>
+⚠️ <i>SEBI Notice: Algorithmic analysis & research simulation. Derivatives trading carries capital risk.</i>
 `.trim();
 }
 
@@ -880,7 +994,7 @@ app.post('/api/telegram/config', (req: Request, res: Response) => {
 
   res.json({
     success: true,
-    message: 'Telegram broadcast configuration saved successfully!',
+    message: 'Chanakya Pro Telegram broadcast configuration saved successfully!',
     data: devSettings.webhooks?.telegram,
   });
 });
@@ -888,11 +1002,11 @@ app.post('/api/telegram/config', (req: Request, res: Response) => {
 app.post('/api/telegram/broadcast-signal', async (req: Request, res: Response) => {
   const { signal, customChannel, customBotToken } = req.body;
   if (!signal) {
-    return res.status(400).json({ success: false, error: 'Price Action signal data required' });
+    return res.status(400).json({ success: false, error: 'Chanakya Pro signal data required' });
   }
 
   const tgConfig = devSettings.webhooks?.telegram || DEFAULT_WEBHOOK_SETTINGS.telegram;
-  const channelName = tgConfig.channelName || 'ShareMarket Pro VIP Price Action';
+  const channelName = tgConfig.channelName || 'Chanakya Pro VIP Broadcast';
   const formattedHtml = formatPriceActionSignalTelegramHtml(signal, channelName);
 
   const dispatchResult = await sendTelegramBroadcast(
@@ -901,16 +1015,16 @@ app.post('/api/telegram/broadcast-signal', async (req: Request, res: Response) =
     customChannel || tgConfig.chatId
   );
 
-  const targetChat = customChannel || tgConfig.chatId || '@sharemarket_price_action_signals';
+  const targetChat = customChannel || tgConfig.chatId || '@chanakya_pro_signals';
 
   auditLogs.unshift({
     id: `log-${Date.now()}`,
     timestamp: new Date().toISOString(),
-    user: 'price_action_engine',
-    action: 'PRICE_ACTION_TELEGRAM_BROADCAST',
+    user: 'chanakya_engine',
+    action: 'CHANAKYA_SIGNAL_TELEGRAM_BROADCAST',
     category: 'ALERT',
     status: dispatchResult.success ? 'SUCCESS' : 'WARNING',
-    details: `Price Action Signal [${signal.action} ${signal.indexSymbol} @ ₹${signal.entryPrice}] broadcasted to Telegram channel ${targetChat} (${dispatchResult.mode} mode)${dispatchResult.error ? ` - Notice: ${dispatchResult.error}` : ''}`,
+    details: `Chanakya Signal [${signal.action} ${signal.indexSymbol} @ ₹${signal.entryPrice}] broadcasted to Telegram channel ${targetChat} (${dispatchResult.mode} mode)${dispatchResult.error ? ` - Notice: ${dispatchResult.error}` : ''}`,
     ipAddress: req.ip || '127.0.0.1',
   });
 
@@ -927,23 +1041,65 @@ app.post('/api/telegram/broadcast-signal', async (req: Request, res: Response) =
   });
 });
 
+app.post('/api/telegram/broadcast-target-win', async (req: Request, res: Response) => {
+  const { winData, customChannel, customBotToken } = req.body;
+  if (!winData) {
+    return res.status(400).json({ success: false, error: 'Target win data required' });
+  }
+
+  const tgConfig = devSettings.webhooks?.telegram || DEFAULT_WEBHOOK_SETTINGS.telegram;
+  const channelName = tgConfig.channelName || 'Chanakya Pro VIP Broadcast';
+  const formattedHtml = formatTargetWinTelegramHtml(winData, channelName);
+
+  const dispatchResult = await sendTelegramBroadcast(
+    formattedHtml,
+    customBotToken || tgConfig.botToken,
+    customChannel || tgConfig.chatId
+  );
+
+  const targetChat = customChannel || tgConfig.chatId || '@chanakya_pro_signals';
+
+  auditLogs.unshift({
+    id: `log-${Date.now()}`,
+    timestamp: new Date().toISOString(),
+    user: 'chanakya_engine',
+    action: 'CHANAKYA_TARGET_WIN_TELEGRAM_BROADCAST',
+    category: 'ALERT',
+    status: dispatchResult.success ? 'SUCCESS' : 'WARNING',
+    details: `Target Win [${winData.indexSymbol || winData.symbol} - ${winData.targetName || 'TARGET HIT'}] broadcasted to ${targetChat}`,
+    ipAddress: req.ip || '127.0.0.1',
+  });
+
+  res.json({
+    success: dispatchResult.success,
+    mode: dispatchResult.mode,
+    channel: targetChat,
+    messageId: dispatchResult.messageId,
+    preview: formattedHtml,
+    message: dispatchResult.success
+      ? `Target Win update broadcasted successfully to Telegram channel ${targetChat}`
+      : `Failed to broadcast to Telegram: ${dispatchResult.error}`,
+    error: dispatchResult.error,
+  });
+});
+
 app.post('/api/telegram/test', async (req: Request, res: Response) => {
   const { botToken, chatId, channelName } = req.body || {};
   const token = botToken || devSettings.webhooks?.telegram?.botToken;
   const chat = chatId || devSettings.webhooks?.telegram?.chatId;
-  const name = channelName || devSettings.webhooks?.telegram?.channelName || 'ShareMarket Pro';
+  const name = channelName || devSettings.webhooks?.telegram?.channelName || 'Chanakya Pro';
 
   const testMessage = `
-<b>🚀 ShareMarket Pro - Telegram Signal Broadcast Connected!</b>
+<b>🚀 Chanakya Pro - Telegram Signal Broadcast Connected!</b>
 ━━━━━━━━━━━━━━━━━━━━━
 ✅ <b>Status:</b> Channel Broadcast Operational
-📡 <b>Engine:</b> Price Action S/R Breakout & Reversal Engine
-🎯 <b>Channel:</b> ${chat || '@sharemarket_price_action_signals'}
+📡 <b>Engine:</b> Chanakya Pro Breakout Engine
+🎯 <b>Channel:</b> ${chat || '@chanakya_signals'}
 🕒 <b>Connected At:</b> ${new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })} IST
 
-⚡ <i>All verified resistance breakouts, support breakdowns, and reversal signals will now be instantly broadcasted to this channel.</i>
+⚡ <i>All verified breakout signals will now be instantly auto-fired to this channel.</i>
 ━━━━━━━━━━━━━━━━━━━━━
-⚠️ <i>SEBI Statutory Disclaimer: Simulation & educational signal feed.</i>
+⚠️ <i>SEBI Statutory Notice: We are NOT SEBI registered. Dispatched for algorithmic simulation & research. Options/Futures carry high capital risk.</i>
 `.trim();
 
   const dispatchResult = await sendTelegramBroadcast(testMessage, token, chat);
@@ -955,7 +1111,7 @@ app.post('/api/telegram/test', async (req: Request, res: Response) => {
     action: 'TELEGRAM_TEST_DISPATCH',
     category: 'ALERT',
     status: dispatchResult.success ? 'SUCCESS' : 'WARNING',
-    details: `Telegram test message sent to ${chat} (${dispatchResult.mode} mode)`,
+    details: `Chanakya Telegram test message sent to ${chat} (${dispatchResult.mode} mode)`,
     ipAddress: req.ip || '127.0.0.1',
   });
 
@@ -965,7 +1121,7 @@ app.post('/api/telegram/test', async (req: Request, res: Response) => {
     chatId: chat,
     messageId: dispatchResult.messageId,
     message: dispatchResult.success
-      ? `Telegram test alert dispatched successfully to ${chat} (${dispatchResult.mode} mode)!`
+      ? `Chanakya Telegram test alert dispatched successfully to ${chat} (${dispatchResult.mode} mode)!`
       : `Telegram dispatch notice: ${dispatchResult.error || 'Check Bot Token or Channel ID'}`,
     error: dispatchResult.error,
   });
@@ -975,10 +1131,10 @@ app.post('/api/alerts/webhook/test', (req: Request, res: Response) => {
   const { channel, recipient, botToken, webhookUrl, customMessage } = req.body;
 
   const testPayload = {
-    event: 'SHAREMARKET_PRO_ALERT_TEST',
+    event: 'CHANAKYA_PRO_ALERT_TEST',
     timestamp: new Date().toISOString(),
     channel: channel || 'telegram',
-    message: customMessage || `🚨 ShareMarket Pro: Test signal alert dispatched successfully! Live pricing and AI engine alerts are operational.`,
+    message: customMessage || `🚨 Chanakya Pro: Test signal alert dispatched successfully! Live pricing and AI engine alerts are operational.`,
     status: 'SENT_SIMULATED',
   };
 
@@ -989,7 +1145,7 @@ app.post('/api/alerts/webhook/test', (req: Request, res: Response) => {
     action: 'WEBHOOK_ALERT_TEST',
     category: 'ALERT',
     status: 'SUCCESS',
-    details: `${(channel || 'telegram').toUpperCase()} alert test dispatched to ${recipient || '@sharemarket_pro_alerts'}`,
+    details: `${(channel || 'telegram').toUpperCase()} alert test dispatched to ${recipient || '@chanakya_pro_alerts'}`,
     ipAddress: req.ip || '127.0.0.1',
   });
 
@@ -1132,10 +1288,10 @@ app.post('/api/broker/angelone/connect-websocket', (req: Request, res: Response)
 });
 
 // =============================================================
-// Price Action Strategy Engine & Edge Finding Endpoints
+// Chanakya Pro Strategy Engine & Edge Finding Endpoints
 // =============================================================
 
-// Get all verified Price Action Signals and current day track record
+// Get all verified Chanakya Pro Signals and current day track record
 app.get('/api/price-action/signals', (req: Request, res: Response) => {
   const index = req.query.index as string | undefined;
   const signals = priceActionEngine.getSignals(index);
@@ -1169,10 +1325,10 @@ app.post('/api/price-action/backtest', (req: Request, res: Response) => {
     id: `log-${Date.now()}`,
     timestamp: new Date().toISOString(),
     user: devSettings.angelOne.clientCode || 'DCP78912',
-    action: 'PRICE_ACTION_BACKTEST',
+    action: 'CHANAKYA_PRO_BACKTEST',
     category: 'TRADE',
     status: 'SUCCESS',
-    details: `Price Action Backtest & Edge Calibration run for ${indexSymbol} (${period}). Win Rate: ${result.winRatePercent}%, Net Points: +${result.netPointsCaptured} pts, Optimal RR: ${result.calibratedOptimalRatio}`,
+    details: `Chanakya Pro Backtest & Edge Calibration run for ${indexSymbol} (${period}). Win Rate: ${result.winRatePercent}%, Net Points: +${result.netPointsCaptured} pts, Optimal RR: ${result.calibratedOptimalRatio}`,
     ipAddress: req.ip || '127.0.0.1',
   });
 

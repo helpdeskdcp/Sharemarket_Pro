@@ -15,12 +15,22 @@ import {
   StrategyRecommendation,
   GttOrder,
   AlertWebhookSettings,
+  UserSession,
+  UserRole,
 } from '../types/market';
-import { INITIAL_TICKERS, INITIAL_AUDIT_LOGS, WORLD_CLASS_STRATEGIES, INITIAL_GTT_ORDERS, DEFAULT_WEBHOOK_SETTINGS } from '../data/mockMarketData';
+import { INITIAL_TICKERS, INITIAL_AUDIT_LOGS, WORLD_CLASS_STRATEGIES, INITIAL_GTT_ORDERS, DEFAULT_WEBHOOK_SETTINGS } from '../data/marketData';
 import { playAlertPing } from '../utils/audioAlert';
 import { logAuditEvent, fetchDeveloperSettings, fetchMarketTickers, fetchGttOrders, createGttOrder as apiCreateGtt, cancelGttOrder as apiCancelGtt, testWebhookAlert, broadcastPriceActionToTelegram } from '../services/api';
+import {
+  authenticateAdministrator,
+  signInWithGoogleFirebase,
+  autoRegisterGmailDemoUser,
+  getSavedUserSession,
+  saveUserSession,
+  logoutUserSession,
+} from '../services/firebaseAuth';
 
-export type WatchlistTab = 'INDICES' | 'NIFTY50' | 'FO' | 'GLOBAL' | 'CUSTOM';
+export type WatchlistTab = 'INDICES' | 'NIFTY50' | 'FO' | 'MCX' | 'GLOBAL' | 'CUSTOM';
 
 interface NotificationItem {
   id: string;
@@ -119,6 +129,18 @@ interface TradingContextType {
   // Subscription / 15-day Demo Trial
   subscription: SubscriptionStatus;
   activateProSubscription: (plan: 'PRO_MONTHLY' | 'INSTITUTIONAL_ANNUAL', paymentId: string) => void;
+
+  // User Authentication & Roles (Administrator vs Demo User)
+  userSession: UserSession;
+  isAdmin: boolean;
+  isDemoUser: boolean;
+  loginAsAdmin: (password: string, username?: string) => boolean;
+  loginWithGmail: (email: string, name?: string) => UserSession;
+  loginWithFirebaseGoogle: () => Promise<UserSession>;
+  logoutUser: () => Promise<void>;
+  switchToDemoUser: () => void;
+  showAuthModal: boolean;
+  setShowAuthModal: (show: boolean) => void;
 }
 
 const TradingContext = createContext<TradingContextType | undefined>(undefined);
@@ -127,7 +149,17 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [tickers, setTickers] = useState<Ticker[]>(INITIAL_TICKERS);
   const [activeSymbol, setActiveSymbol] = useState<string>('NIFTY 50');
   const [watchlistType, setWatchlistType] = useState<WatchlistTab>('INDICES');
-  const [customWatchlist, setCustomWatchlist] = useState<string[]>(['NIFTY 50', 'BANKNIFTY', 'RELIANCE', 'TCS', 'GIFT NIFTY', 'S&P 500']);
+  const [customWatchlist, setCustomWatchlist] = useState<string[]>([
+    'NIFTY 50',
+    'BANKNIFTY',
+    'CRUDEOIL',
+    'NATURALGAS',
+    'GOLD',
+    'SILVER',
+    'RELIANCE',
+    'TCS',
+    'GIFT NIFTY',
+  ]);
   const [tickFlashMap, setTickFlashMap] = useState<Record<string, 'UP' | 'DOWN' | null>>({});
   const [lastTickTime, setLastTickTime] = useState<number>(Date.now());
   const [feedSource, setFeedSource] = useState<string>('Angel One SmartAPI WebSocket 2.0 (Smart-Stream)');
@@ -197,6 +229,18 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
       pnl: 1320.00,
       pnlPercent: 0.72,
       instrumentType: 'EQUITY',
+    },
+    {
+      id: 'pos-3',
+      symbol: 'CRUDEOIL',
+      side: 'BUY',
+      product: 'NRML',
+      quantity: 100,
+      avgPrice: 6120.00,
+      currentPrice: 6145.00,
+      pnl: 2500.00,
+      pnlPercent: 0.41,
+      instrumentType: 'COMMODITY',
     }
   ]);
 
@@ -226,6 +270,19 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
       status: 'EXECUTED',
       timestamp: new Date(Date.now() - 1800000).toLocaleTimeString(),
       brokerMode: 'ANGELONE',
+    },
+    {
+      id: 'ord-8814',
+      symbol: 'CRUDEOIL',
+      side: 'BUY',
+      type: 'MARKET',
+      product: 'NRML',
+      quantity: 100,
+      price: 6120.00,
+      executedPrice: 6120.00,
+      status: 'EXECUTED',
+      timestamp: new Date(Date.now() - 900000).toLocaleTimeString(),
+      brokerMode: 'ANGELONE',
     }
   ]);
 
@@ -248,13 +305,22 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
       note: 'Major psychological barrier crossing',
       createdAt: new Date().toLocaleTimeString(),
       triggered: false,
+    },
+    {
+      id: 'alt-3',
+      symbol: 'NATURALGAS',
+      targetPrice: 240.00,
+      condition: 'GTE',
+      note: 'Key inventory breakout resistance level test',
+      createdAt: new Date().toLocaleTimeString(),
+      triggered: false,
     }
   ]);
 
   const [notifications, setNotifications] = useState<NotificationItem[]>([
     {
       id: 'notif-1',
-      title: 'Welcome to ShareMarket Pro',
+      title: 'Welcome to Chanakya Pro',
       message: '15-Day Free Trial activated. SEBI regulatory compliance guidelines in effect.',
       timestamp: 'Just now',
       type: 'SYSTEM',
@@ -304,15 +370,86 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
     executionMode: 'PAPER',
   });
 
-  // Subscription / 15-day Demo trial
-  const [subscription, setSubscription] = useState<SubscriptionStatus>({
-    isTrial: true,
-    trialDaysLeft: 11, // Demo user allows 15 days only of free trial access
-    trialExpiryDate: new Date(Date.now() + 11 * 24 * 3600 * 1000).toLocaleDateString(),
-    plan: 'TRIAL',
-    active: true,
-    expiresAt: new Date(Date.now() + 11 * 24 * 3600 * 1000).toISOString(),
+  // User Authentication & Role Access Control
+  const [userSession, setUserSession] = useState<UserSession>(() => {
+    const saved = getSavedUserSession();
+    if (saved) return saved;
+    // Default to Administrator with Unlimited Trial as requested
+    const adminSession: UserSession = {
+      username: 'admin',
+      email: 'dcpstudio1982@gmail.com',
+      name: 'Administrator (DCP Studio)',
+      role: 'ADMINISTRATOR',
+      isUnlimited: true,
+      loginTime: new Date().toISOString(),
+      authProvider: 'ADMIN_CREDENTIALS',
+    };
+    saveUserSession(adminSession);
+    return adminSession;
   });
+
+  const [showAuthModal, setShowAuthModal] = useState<boolean>(false);
+
+  const isAdmin = userSession.role === 'ADMINISTRATOR';
+  const isDemoUser = userSession.role === 'DEMO_USER';
+
+  // Dynamic Subscription based on Role: Administrator = Unlimited, Demo User = 15 Days
+  const [customSubscription, setCustomSubscription] = useState<SubscriptionStatus | null>(null);
+
+  const subscription = useMemo<SubscriptionStatus>(() => {
+    if (customSubscription) return customSubscription;
+    if (isAdmin) {
+      return {
+        isTrial: false,
+        trialDaysLeft: 99999,
+        trialExpiryDate: 'UNLIMITED LIFETIME ACCESS',
+        plan: 'INSTITUTIONAL_ANNUAL',
+        active: true,
+        expiresAt: '2099-12-31T23:59:59.000Z',
+      };
+    }
+    return {
+      isTrial: true,
+      trialDaysLeft: 15,
+      trialExpiryDate: new Date(Date.now() + 15 * 86400000).toLocaleDateString(),
+      plan: 'TRIAL',
+      active: true,
+      expiresAt: new Date(Date.now() + 15 * 86400000).toISOString(),
+    };
+  }, [isAdmin, customSubscription]);
+
+  const loginAsAdmin = useCallback((password: string, username: string = 'admin'): boolean => {
+    const session = authenticateAdministrator(username, password);
+    if (session) {
+      setUserSession(session);
+      return true;
+    }
+    return false;
+  }, []);
+
+  const loginWithGmail = useCallback((email: string, name?: string): UserSession => {
+    const session = autoRegisterGmailDemoUser(email, name);
+    setUserSession(session);
+    return session;
+  }, []);
+
+  const loginWithFirebaseGoogle = useCallback(async (): Promise<UserSession> => {
+    const session = await signInWithGoogleFirebase();
+    setUserSession(session);
+    return session;
+  }, []);
+
+  const logoutUser = useCallback(async (): Promise<void> => {
+    await logoutUserSession();
+    // Default to demo user upon logout
+    const demo = autoRegisterGmailDemoUser('demo.trader@gmail.com', 'Demo Trader');
+    setUserSession(demo);
+  }, []);
+
+  const switchToDemoUser = useCallback((): void => {
+    const demo = autoRegisterGmailDemoUser('demouser@gmail.com', 'Demo Trader');
+    setUserSession(demo);
+  }, []);
 
   // AI Strategy & Market Sentiment state
   const [allStrategies, setAllStrategies] = useState<StrategyRecommendation[]>(WORLD_CLASS_STRATEGIES);
@@ -851,7 +988,7 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
   }, []);
 
   const activateProSubscription = useCallback((plan: 'PRO_MONTHLY' | 'INSTITUTIONAL_ANNUAL', paymentId: string) => {
-    setSubscription({
+    setCustomSubscription({
       isTrial: false,
       trialDaysLeft: 0,
       trialExpiryDate: 'Permanent (Active Paid)',
@@ -949,7 +1086,7 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
       recipient: channel === 'telegram' ? webhookSettings.telegram.chatId : webhookSettings.whatsapp.recipientNumber,
       botToken: webhookSettings.telegram.botToken,
       webhookUrl: webhookSettings.whatsapp.webhookUrl,
-      customMessage: `🚨 ShareMarket Pro: Verified instant trade signal transmission for ${channel.toUpperCase()}. System ready for live alerts!`,
+      customMessage: `🚨 Chanakya Pro: Verified instant trade signal transmission for ${channel.toUpperCase()}. System ready for live alerts!`,
     });
 
     if (soundEnabled) {
@@ -1065,6 +1202,18 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
         subscription,
         activateProSubscription,
+
+        // Authentication & Role Access
+        userSession,
+        isAdmin,
+        isDemoUser,
+        loginAsAdmin,
+        loginWithGmail,
+        loginWithFirebaseGoogle,
+        logoutUser,
+        switchToDemoUser,
+        showAuthModal,
+        setShowAuthModal,
       }}
     >
       {children}

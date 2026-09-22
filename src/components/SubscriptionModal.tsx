@@ -46,7 +46,7 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({ isOpen, on
           key: orderData.keyId,
           amount: orderData.amount,
           currency: 'INR',
-          name: 'ShareMarket Pro Terminal',
+          name: 'Chanakya Pro Terminal',
           description: `Subscription: ${selectedPlan} Pro Access`,
           order_id: orderData.orderId,
           handler: async function (response: any) {

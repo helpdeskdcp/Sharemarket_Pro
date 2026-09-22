@@ -37,7 +37,16 @@ export const EXCHANGE_SYMBOL_MAP: Record<
   'S&P 500': { yahooSymbol: '^GSPC', token: 'SPX', exchange: 'GLOBAL', name: 'S&P 500 Index', instrumentType: 'GLOBAL', lotSize: 1 },
   'DOW JONES': { yahooSymbol: '^DJI', token: 'DJI', exchange: 'GLOBAL', name: 'Dow Jones Industrial Average', instrumentType: 'GLOBAL', lotSize: 1 },
   'CRUDE OIL': { yahooSymbol: 'CL=F', token: 'MCX_CRUDE', exchange: 'MCX', name: 'Crude Oil Futures (MCX)', instrumentType: 'COMMODITY', lotSize: 100 },
-  'GOLD': { yahooSymbol: 'GC=F', token: 'MCX_GOLD', exchange: 'MCX', name: 'Gold Futures (MCX)', instrumentType: 'COMMODITY', lotSize: 1 },
+  'CRUDEOIL': { yahooSymbol: 'CL=F', token: 'MCX_CRUDE', exchange: 'MCX', name: 'MCX Crude Oil Futures', instrumentType: 'COMMODITY', lotSize: 100 },
+  'CRUDEOILMINI': { yahooSymbol: 'CL=F', token: 'MCX_CRDM', exchange: 'MCX', name: 'MCX Crude Oil Mini Futures', instrumentType: 'COMMODITY', lotSize: 10 },
+  'NATURALGAS': { yahooSymbol: 'NG=F', token: 'MCX_NG', exchange: 'MCX', name: 'MCX Natural Gas Futures', instrumentType: 'COMMODITY', lotSize: 1250 },
+  'NATURALGASMINI': { yahooSymbol: 'NG=F', token: 'MCX_NGM', exchange: 'MCX', name: 'MCX Natural Gas Mini Futures', instrumentType: 'COMMODITY', lotSize: 250 },
+  'GOLD': { yahooSymbol: 'GC=F', token: 'MCX_GOLD', exchange: 'MCX', name: 'MCX Gold Bullion Futures', instrumentType: 'COMMODITY', lotSize: 1 },
+  'GOLDMINI': { yahooSymbol: 'GC=F', token: 'MCX_GLDM', exchange: 'MCX', name: 'MCX Gold Mini Futures', instrumentType: 'COMMODITY', lotSize: 1 },
+  'SILVER': { yahooSymbol: 'SI=F', token: 'MCX_SILVER', exchange: 'MCX', name: 'MCX Silver Bullion Futures', instrumentType: 'COMMODITY', lotSize: 30 },
+  'SILVERMINI': { yahooSymbol: 'SI=F', token: 'MCX_SLVM', exchange: 'MCX', name: 'MCX Silver Mini Futures', instrumentType: 'COMMODITY', lotSize: 5 },
+  'COPPER': { yahooSymbol: 'HG=F', token: 'MCX_COPPER', exchange: 'MCX', name: 'MCX Copper Futures', instrumentType: 'COMMODITY', lotSize: 2500 },
+  'ZINC': { yahooSymbol: 'ZNC=F', token: 'MCX_ZINC', exchange: 'MCX', name: 'MCX Zinc Futures', instrumentType: 'COMMODITY', lotSize: 5000 },
 };
 
 export class AngelOneLiveStreamer {
@@ -88,8 +97,17 @@ export class AngelOneLiveStreamer {
       'NASDAQ': { ltp: 18074.52, close: 17948.32, high: 18120.40, low: 17920.00, open: 17980.00, volume: 1020000000 },
       'S&P 500': { ltp: 5699.94, close: 5648.40, high: 5712.00, low: 5640.00, open: 5655.00, volume: 2450000000 },
       'DOW JONES': { ltp: 42063.36, close: 41914.75, high: 42150.00, low: 41880.00, open: 41950.00, volume: 380000000 },
-      'CRUDE OIL': { ltp: 5984.00, close: 5912.00, high: 6040.00, low: 5890.00, open: 5920.00, volume: 284000 },
-      'GOLD': { ltp: 74850.00, close: 74320.00, high: 75100.00, low: 74200.00, open: 74400.00, volume: 82000 },
+      'CRUDE OIL': { ltp: 6145.00, close: 6047.00, high: 6195.00, low: 6020.00, open: 6050.00, volume: 348200 },
+      'CRUDEOIL': { ltp: 6145.00, close: 6047.00, high: 6195.00, low: 6020.00, open: 6050.00, volume: 348200 },
+      'CRUDEOILMINI': { ltp: 6145.00, close: 6047.00, high: 6195.00, low: 6020.00, open: 6050.00, volume: 184500 },
+      'NATURALGAS': { ltp: 234.60, close: 228.80, high: 238.40, low: 228.10, open: 229.00, volume: 148920 },
+      'NATURALGASMINI': { ltp: 234.60, close: 228.80, high: 238.40, low: 228.10, open: 229.00, volume: 68400 },
+      'GOLD': { ltp: 75420.00, close: 75010.00, high: 75680.00, low: 74900.00, open: 75050.00, volume: 84200 },
+      'GOLDMINI': { ltp: 75420.00, close: 75010.00, high: 75680.00, low: 74900.00, open: 75050.00, volume: 52000 },
+      'SILVER': { ltp: 91450.00, close: 90200.00, high: 91800.00, low: 89900.00, open: 90200.00, volume: 64200 },
+      'SILVERMINI': { ltp: 91450.00, close: 90200.00, high: 91800.00, low: 89900.00, open: 90200.00, volume: 48000 },
+      'COPPER': { ltp: 842.50, close: 834.30, high: 848.00, low: 832.00, open: 834.00, volume: 32000 },
+      'ZINC': { ltp: 285.40, close: 282.30, high: 288.00, low: 281.00, open: 282.00, volume: 24000 },
     };
 
     Object.entries(EXCHANGE_SYMBOL_MAP).forEach(([sym, meta]) => {
@@ -129,17 +147,89 @@ export class AngelOneLiveStreamer {
   private startRealTimeExchangeFeed() {
     if (this.pollingTimer) clearInterval(this.pollingTimer);
 
+    let cachedUsdInr = 84.05;
+
     const fetchLiveExchangeBatch = async () => {
       try {
         const symbolsToFetch = [
-          '^NSEI', '^NSEBANK', '^BSESN', 'RELIANCE.NS', 'HDFCBANK.NS',
-          'INFY.NS', 'TCS.NS', 'TATAMOTORS.NS', 'SBIN.NS', 'ICICIBANK.NS',
-          'BHARTIARTL.NS', '^INDIAVIX', 'CL=F', 'GC=F', '^IXIC', '^GSPC', '^DJI'
+          '^NSEI', '^NSEBANK', '^BSESN', 'NIFTY_FIN_SERVICE.NS', 'NIFTY_MIDCAP_50.NS',
+          'RELIANCE.NS', 'HDFCBANK.NS', 'INFY.NS', 'TCS.NS', 'TATAMOTORS.NS',
+          'SBIN.NS', 'ICICIBANK.NS', 'BHARTIARTL.NS', '^INDIAVIX',
+          'CL=F', 'NG=F', 'GC=F', 'SI=F', 'HG=F',
+          '^IXIC', '^GSPC', '^DJI', 'INR=X'
         ];
 
-        const queryUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent('^NSEI')}?interval=1m&range=1d`;
-        
-        // Fetch real market prices for key symbols
+        // First attempt to query Angel One SmartAPI Quote REST API if session is active
+        let angelOneQuotesSuccess = false;
+        if (this.apiKey && this.clientCode && this.feedToken && this.feedToken.length > 10) {
+          try {
+            const angelRes = await fetch('https://apiconnect.angelone.in/rest/secure/angelbroking/market/v1/quote', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+                'X-UserType': 'USER',
+                'X-SourceID': 'WEB',
+                'X-ClientLocalIP': '127.0.0.1',
+                'X-ClientPublicIP': '127.0.0.1',
+                'X-MACAddress': 'fe80::1',
+                'X-PrivateKey': this.apiKey,
+                'Authorization': `Bearer ${this.feedToken}`,
+              },
+              body: JSON.stringify({
+                mode: 'FULL',
+                exchangeTokens: {
+                  NSE: ['99926000', '99926009', '99926037', '2885', '1333', '1594'],
+                  BSE: ['99919000', '99919012'],
+                  MCX: ['254823', '254830', '254810', '254815'],
+                },
+              }),
+            });
+
+            if (angelRes.ok) {
+              const angelData = await angelRes.json();
+              if (angelData?.status && angelData?.data?.fetched) {
+                const fetchedList: any[] = angelData.data.fetched;
+                const flashes: Record<string, 'UP' | 'DOWN'> = {};
+                fetchedList.forEach((q: any) => {
+                  const entry = Object.entries(EXCHANGE_SYMBOL_MAP).find(([_, m]) => m.token === q.symbolToken);
+                  if (entry) {
+                    const [sym] = entry;
+                    const existing = this.currentTickers.get(sym);
+                    if (existing && q.ltp) {
+                      const newLtp = Number(q.ltp);
+                      const direction = newLtp >= existing.ltp ? 'UP' : 'DOWN';
+                      if (newLtp !== existing.ltp) flashes[sym] = direction;
+                      const change = Number((newLtp - (q.close || existing.close)).toFixed(2));
+                      const changePercent = Number(((change / (q.close || existing.close)) * 100).toFixed(2));
+
+                      this.currentTickers.set(sym, {
+                        ...existing,
+                        ltp: newLtp,
+                        change,
+                        changePercent,
+                        high: Number(q.high || existing.high),
+                        low: Number(q.low || existing.low),
+                        close: Number(q.close || existing.close),
+                        volume: Number(q.tradeVolume || existing.volume),
+                        tickDirection: direction,
+                        lastUpdated: new Date().toISOString(),
+                      });
+                    }
+                  }
+                });
+                this.feedStatus = 'ANGELONE_WS_CONNECTED';
+                this.totalTicks += fetchedList.length;
+                this.notifyListeners(flashes);
+                angelOneQuotesSuccess = true;
+              }
+            }
+          } catch {
+            // Fall through to real exchange live gateway
+          }
+        }
+
+        // Real financial exchange rates poller
         const fetchPromises = symbolsToFetch.map(async (yahooSym) => {
           try {
             const res = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSym)}?interval=1m&range=1d`, {
@@ -164,56 +254,109 @@ export class AngelOneLiveStreamer {
         });
 
         const results = await Promise.all(fetchPromises);
+        const inrResult = results.find(r => r && r.yahooSym === 'INR=X');
+        if (inrResult && inrResult.price > 70 && inrResult.price < 95) {
+          cachedUsdInr = inrResult.price;
+        }
+
         const flashes: Record<string, 'UP' | 'DOWN'> = {};
         let updatedCount = 0;
 
         results.forEach((r) => {
-          if (!r) return;
-          // Find matching local ticker
-          const entry = Object.entries(EXCHANGE_SYMBOL_MAP).find(([_, m]) => m.yahooSymbol === r.yahooSym);
-          if (entry) {
-            const [sym] = entry;
-            const existing = this.currentTickers.get(sym);
-            if (existing) {
-              const direction = r.price >= existing.ltp ? 'UP' : 'DOWN';
-              if (r.price !== existing.ltp) {
-                flashes[sym] = direction;
-              }
-              const change = Number((r.price - r.prevClose).toFixed(2));
-              const changePercent = Number(((change / r.prevClose) * 100).toFixed(2));
+          if (!r || r.yahooSym === 'INR=X') return;
+          const matchingEntries = Object.entries(EXCHANGE_SYMBOL_MAP).filter(([_, m]) => m.yahooSymbol === r.yahooSym);
 
-              this.currentTickers.set(sym, {
-                ...existing,
-                ltp: r.price,
-                change,
-                changePercent,
-                high: Math.max(r.high, r.price),
-                low: Math.min(r.low, r.price),
-                close: r.prevClose,
-                volume: r.volume || existing.volume,
-                tickDirection: direction,
-                lastUpdated: new Date().toISOString(),
-              });
-              updatedCount++;
+          matchingEntries.forEach(([sym, meta]) => {
+            const existing = this.currentTickers.get(sym);
+            if (!existing) return;
+
+            let targetPrice = r.price;
+            let targetClose = r.prevClose;
+            let targetHigh = r.high;
+            let targetLow = r.low;
+
+            // Accurate MCX Commodity conversion to Indian Rupee according to exchange lot/contract specifications
+            if (meta.exchange === 'MCX') {
+              if (sym === 'CRUDEOIL' || sym === 'CRUDE OIL' || sym === 'CRUDEOILMINI') {
+                // Crude Oil: USD/bbl * USDINR = MCX ₹/bbl
+                targetPrice = Number((r.price * cachedUsdInr).toFixed(2));
+                targetClose = Number((r.prevClose * cachedUsdInr).toFixed(2));
+                targetHigh = Number((r.high * cachedUsdInr).toFixed(2));
+                targetLow = Number((r.low * cachedUsdInr).toFixed(2));
+              } else if (sym === 'NATURALGAS' || sym === 'NATURALGASMINI') {
+                // Natural Gas: USD/mmBtu * USDINR = MCX ₹/mmBtu
+                targetPrice = Number((r.price * cachedUsdInr).toFixed(2));
+                targetClose = Number((r.prevClose * cachedUsdInr).toFixed(2));
+                targetHigh = Number((r.high * cachedUsdInr).toFixed(2));
+                targetLow = Number((r.low * cachedUsdInr).toFixed(2));
+              } else if (sym === 'GOLD' || sym === 'GOLDMINI') {
+                // Gold: USD/troy oz (31.1035g) to ₹/10g with 15% Indian duty & import parity
+                const factor = (cachedUsdInr / 31.1034768) * 10 * 1.15;
+                targetPrice = Number((r.price * factor).toFixed(2));
+                targetClose = Number((r.prevClose * factor).toFixed(2));
+                targetHigh = Number((r.high * factor).toFixed(2));
+                targetLow = Number((r.low * factor).toFixed(2));
+              } else if (sym === 'SILVER' || sym === 'SILVERMINI') {
+                // Silver: USD/troy oz to ₹/kg with 15% Indian duty & import parity
+                const factor = (cachedUsdInr / 31.1034768) * 1000 * 1.15;
+                targetPrice = Number((r.price * factor).toFixed(2));
+                targetClose = Number((r.prevClose * factor).toFixed(2));
+                targetHigh = Number((r.high * factor).toFixed(2));
+                targetLow = Number((r.low * factor).toFixed(2));
+              } else if (sym === 'COPPER') {
+                // Copper: USD/lb to ₹/kg (1 lb = 0.453592 kg)
+                const factor = cachedUsdInr / 0.45359237;
+                targetPrice = Number((r.price * factor).toFixed(2));
+                targetClose = Number((r.prevClose * factor).toFixed(2));
+                targetHigh = Number((r.high * factor).toFixed(2));
+                targetLow = Number((r.low * factor).toFixed(2));
+              } else if (sym === 'ZINC') {
+                const factor = (cachedUsdInr / 0.45359237) * 0.35;
+                targetPrice = Number((r.price * factor).toFixed(2));
+                targetClose = Number((r.prevClose * factor).toFixed(2));
+                targetHigh = Number((r.high * factor).toFixed(2));
+                targetLow = Number((r.low * factor).toFixed(2));
+              }
             }
-          }
+
+            const direction = targetPrice >= existing.ltp ? 'UP' : 'DOWN';
+            if (targetPrice !== existing.ltp) {
+              flashes[sym] = direction;
+            }
+            const change = Number((targetPrice - targetClose).toFixed(2));
+            const changePercent = Number(((change / (targetClose || 1)) * 100).toFixed(2));
+
+            this.currentTickers.set(sym, {
+              ...existing,
+              ltp: targetPrice,
+              change,
+              changePercent,
+              high: Math.max(targetHigh, targetPrice),
+              low: Math.min(targetLow, targetPrice),
+              close: targetClose,
+              volume: r.volume || existing.volume,
+              tickDirection: direction,
+              lastUpdated: new Date().toISOString(),
+            });
+            updatedCount++;
+          });
         });
 
         if (updatedCount > 0) {
           this.totalTicks += updatedCount;
-          if (this.feedStatus !== 'ANGELONE_WS_CONNECTED') {
+          if (!angelOneQuotesSuccess) {
             this.feedStatus = 'REAL_EXCHANGE_LIVE';
           }
           this.notifyListeners(flashes);
         }
       } catch (err) {
-        // Fallback smooth tick variation to keep UI active if offline
+        console.warn('Live exchange polling update:', err);
       }
     };
 
-    // Run immediately and every 1.8 seconds
+    // Run immediately and every 1.5 seconds for low latency
     fetchLiveExchangeBatch();
-    this.pollingTimer = setInterval(fetchLiveExchangeBatch, 1800);
+    this.pollingTimer = setInterval(fetchLiveExchangeBatch, 1500);
   }
 
   // Connect to Angel One SmartAPI WebSocket 2.0
@@ -240,7 +383,7 @@ export class AngelOneLiveStreamer {
         this.isConnecting = false;
         this.feedStatus = 'ANGELONE_WS_CONNECTED';
 
-        // Subscribe to NSE & BSE Tokens in Mode 1 (LTP) or Mode 2 (Quote)
+        // Subscribe to NSE, BSE, and MCX Tokens in Mode 1 (LTP) or Mode 2 (Quote)
         const subMsg = {
           correlationID: 'sharemarket_pro_' + Date.now(),
           action: 1, // 1 = Subscribe
@@ -254,6 +397,10 @@ export class AngelOneLiveStreamer {
               {
                 exchangeType: 3, // BSE
                 tokens: ['99919000', '99919012'],
+              },
+              {
+                exchangeType: 5, // MCX Commodities
+                tokens: ['MCX_CRUDE', 'MCX_NG', 'MCX_GOLD', 'MCX_SILVER', 'MCX_COPPER', 'MCX_ZINC'],
               },
             ],
           },

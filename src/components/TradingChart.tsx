@@ -22,7 +22,7 @@ interface TradingChartProps {
 }
 
 export const TradingChart: React.FC<TradingChartProps> = ({ onQuickOrder, onOpenAlertModal }) => {
-  const { activeTicker, activeSymbol } = useTrading();
+  const { activeTicker, activeSymbol, setActiveSymbol } = useTrading();
   const [timeframe, setTimeframe] = useState<'1D' | '1W' | '1M' | '1Y'>('1D');
   const [chartType, setChartType] = useState<'CANDLE' | 'LINE'>('CANDLE');
   const [candles, setCandles] = useState<HistoricalCandle[]>([]);
@@ -356,10 +356,30 @@ export const TradingChart: React.FC<TradingChartProps> = ({ onQuickOrder, onOpen
 
         <button
           onClick={() => onOpenAlertModal(activeTicker.symbol, activeTicker.ltp)}
-          className="text-amber-400 hover:text-amber-300 text-[11px] font-semibold flex items-center gap-1"
+          className="text-amber-400 hover:text-amber-300 text-[11px] font-semibold flex items-center gap-1 shrink-0"
         >
-          + Set Alert at ₹{activeTicker.ltp.toFixed(2)}
+          + Set Alert at {activeTicker.currency === 'USD' ? '$' : '₹'}{activeTicker.ltp.toFixed(2)}
         </button>
+      </div>
+
+      {/* Quick Underlying / MCX Commodity Selector */}
+      <div className="px-3 py-1 bg-[#070b14] border-b border-slate-800/60 flex items-center gap-2 overflow-x-auto scrollbar-none text-[11px] font-mono">
+        <span className="text-slate-500 font-bold shrink-0">Fast Switch:</span>
+        <div className="flex items-center gap-1 shrink-0">
+          {(['NIFTY 50', 'BANKNIFTY', 'SENSEX', 'FINNIFTY', 'CRUDEOIL', 'NATURALGAS', 'GOLD', 'SILVER', 'COPPER'] as const).map(sym => (
+            <button
+              key={sym}
+              onClick={() => setActiveSymbol(sym)}
+              className={`px-2 py-0.5 rounded transition cursor-pointer whitespace-nowrap font-bold ${
+                activeSymbol === sym
+                  ? 'bg-cyan-500 text-slate-950 shadow-sm'
+                  : 'bg-slate-900/80 text-slate-400 hover:text-white border border-slate-800'
+              }`}
+            >
+              {sym}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* SVG Canvas Chart Area */}

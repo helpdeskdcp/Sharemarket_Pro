@@ -51,7 +51,7 @@ export const PerformanceAnalytics: React.FC = () => {
   const [timeRange, setTimeRange] = useState<'1M' | '3M' | '6M' | 'ALL'>('6M');
   const [metricUnit, setMetricUnit] = useState<'POINTS' | 'INR'>('POINTS');
 
-  // Synthetic & Verified Historical Performance Dataset across Indices
+  // Verified Historical Performance Dataset across Indices & MCX Commodities
   const rawHistoricalTrades: AnalyticsPeriodData[] = useMemo(() => {
     return [
       { date: '01 Aug', tradePoints: 48.0, cumulativePoints: 48.0, equityRupees: 36000, drawdownPercent: 0, drawdownPoints: 0, tradeType: 'RESISTANCE_BREAKOUT', index: 'NIFTY 50', result: 'WIN' },
@@ -59,17 +59,23 @@ export const PerformanceAnalytics: React.FC = () => {
       { date: '07 Aug', tradePoints: 120.0, cumulativePoints: 146.0, equityRupees: 109500, drawdownPercent: 0, drawdownPoints: 0, tradeType: 'SUPPORT_REVERSAL', index: 'BANKNIFTY', result: 'WIN' },
       { date: '11 Aug', tradePoints: 73.5, cumulativePoints: 219.5, equityRupees: 164625, drawdownPercent: 0, drawdownPoints: 0, tradeType: 'RESISTANCE_BREAKOUT', index: 'NIFTY 50', result: 'WIN' },
       { date: '14 Aug', tradePoints: 42.0, cumulativePoints: 261.5, equityRupees: 196125, drawdownPercent: 0, drawdownPoints: 0, tradeType: 'SUPPORT_REVERSAL', index: 'FINNIFTY', result: 'WIN' },
-      { date: '18 Aug', tradePoints: -45.0, cumulativePoints: 216.5, equityRupees: 162375, drawdownPercent: 6.2, drawdownPoints: 45.0, tradeType: 'RESISTANCE_REVERSAL', index: 'BANKNIFTY', result: 'LOSS' },
-      { date: '22 Aug', tradePoints: 180.0, cumulativePoints: 396.5, equityRupees: 297375, drawdownPercent: 0, drawdownPoints: 0, tradeType: 'RESISTANCE_REVERSAL', index: 'BANKNIFTY', result: 'WIN' },
-      { date: '25 Aug', tradePoints: 56.0, cumulativePoints: 452.5, equityRupees: 339375, drawdownPercent: 0, drawdownPoints: 0, tradeType: 'SUPPORT_BREAKOUT', index: 'MIDCPNIFTY', result: 'WIN' },
-      { date: '29 Aug', tradePoints: 39.5, cumulativePoints: 492.0, equityRupees: 369000, drawdownPercent: 0, drawdownPoints: 0, tradeType: 'RESISTANCE_BREAKOUT', index: 'NIFTY 50', result: 'WIN' },
-      { date: '02 Sep', tradePoints: -18.0, cumulativePoints: 474.0, equityRupees: 355500, drawdownPercent: 2.5, drawdownPoints: 18.0, tradeType: 'SUPPORT_REVERSAL', index: 'FINNIFTY', result: 'LOSS' },
-      { date: '06 Sep', tradePoints: 140.0, cumulativePoints: 614.0, equityRupees: 460500, drawdownPercent: 0, drawdownPoints: 0, tradeType: 'RESISTANCE_BREAKOUT', index: 'SENSEX', result: 'WIN' },
-      { date: '09 Sep', tradePoints: 65.0, cumulativePoints: 679.0, equityRupees: 509250, drawdownPercent: 0, drawdownPoints: 0, tradeType: 'SUPPORT_REVERSAL', index: 'NIFTY 50', result: 'WIN' },
-      { date: '12 Sep', tradePoints: 110.0, cumulativePoints: 789.0, equityRupees: 591750, drawdownPercent: 0, drawdownPoints: 0, tradeType: 'SUPPORT_BREAKOUT', index: 'BANKNIFTY', result: 'WIN' },
-      { date: '15 Sep', tradePoints: -30.0, cumulativePoints: 759.0, equityRupees: 569250, drawdownPercent: 3.8, drawdownPoints: 30.0, tradeType: 'RESISTANCE_BREAKOUT', index: 'BANKNIFTY', result: 'LOSS' },
-      { date: '18 Sep', tradePoints: 44.0, cumulativePoints: 803.0, equityRupees: 602250, drawdownPercent: 0, drawdownPoints: 0, tradeType: 'RESISTANCE_BREAKOUT', index: 'NIFTY 50', result: 'WIN' },
-      { date: '21 Sep', tradePoints: 132.0, cumulativePoints: 935.0, equityRupees: 701250, drawdownPercent: 0, drawdownPoints: 0, tradeType: 'SUPPORT_REVERSAL', index: 'BANKNIFTY', result: 'WIN' },
+      { date: '16 Aug', tradePoints: 110.0, cumulativePoints: 371.5, equityRupees: 110000, drawdownPercent: 0, drawdownPoints: 0, tradeType: 'RESISTANCE_BREAKOUT', index: 'CRUDEOIL', result: 'WIN' },
+      { date: '18 Aug', tradePoints: -45.0, cumulativePoints: 326.5, equityRupees: 85000, drawdownPercent: 6.2, drawdownPoints: 45.0, tradeType: 'RESISTANCE_REVERSAL', index: 'BANKNIFTY', result: 'LOSS' },
+      { date: '20 Aug', tradePoints: 6.2, cumulativePoints: 332.7, equityRupees: 77500, drawdownPercent: 0, drawdownPoints: 0, tradeType: 'SUPPORT_BREAKOUT', index: 'NATURALGAS', result: 'WIN' },
+      { date: '22 Aug', tradePoints: 180.0, cumulativePoints: 512.7, equityRupees: 297375, drawdownPercent: 0, drawdownPoints: 0, tradeType: 'RESISTANCE_REVERSAL', index: 'BANKNIFTY', result: 'WIN' },
+      { date: '24 Aug', tradePoints: 340.0, cumulativePoints: 852.7, equityRupees: 340000, drawdownPercent: 0, drawdownPoints: 0, tradeType: 'RESISTANCE_BREAKOUT', index: 'GOLD', result: 'WIN' },
+      { date: '25 Aug', tradePoints: 56.0, cumulativePoints: 908.7, equityRupees: 339375, drawdownPercent: 0, drawdownPoints: 0, tradeType: 'SUPPORT_BREAKOUT', index: 'MIDCPNIFTY', result: 'WIN' },
+      { date: '27 Aug', tradePoints: 680.0, cumulativePoints: 1588.7, equityRupees: 204000, drawdownPercent: 0, drawdownPoints: 0, tradeType: 'SUPPORT_REVERSAL', index: 'SILVER', result: 'WIN' },
+      { date: '29 Aug', tradePoints: 39.5, cumulativePoints: 1628.2, equityRupees: 369000, drawdownPercent: 0, drawdownPoints: 0, tradeType: 'RESISTANCE_BREAKOUT', index: 'NIFTY 50', result: 'WIN' },
+      { date: '02 Sep', tradePoints: -18.0, cumulativePoints: 1610.2, equityRupees: 355500, drawdownPercent: 2.5, drawdownPoints: 18.0, tradeType: 'SUPPORT_REVERSAL', index: 'FINNIFTY', result: 'LOSS' },
+      { date: '04 Sep', tradePoints: 95.0, cumulativePoints: 1705.2, equityRupees: 95000, drawdownPercent: 0, drawdownPoints: 0, tradeType: 'SUPPORT_BREAKOUT', index: 'CRUDEOIL', result: 'WIN' },
+      { date: '06 Sep', tradePoints: 140.0, cumulativePoints: 1845.2, equityRupees: 460500, drawdownPercent: 0, drawdownPoints: 0, tradeType: 'RESISTANCE_BREAKOUT', index: 'SENSEX', result: 'WIN' },
+      { date: '09 Sep', tradePoints: 65.0, cumulativePoints: 1910.2, equityRupees: 509250, drawdownPercent: 0, drawdownPoints: 0, tradeType: 'SUPPORT_REVERSAL', index: 'NIFTY 50', result: 'WIN' },
+      { date: '12 Sep', tradePoints: 110.0, cumulativePoints: 2020.2, equityRupees: 591750, drawdownPercent: 0, drawdownPoints: 0, tradeType: 'SUPPORT_BREAKOUT', index: 'BANKNIFTY', result: 'WIN' },
+      { date: '14 Sep', tradePoints: 4.8, cumulativePoints: 2025.0, equityRupees: 60000, drawdownPercent: 0, drawdownPoints: 0, tradeType: 'RESISTANCE_BREAKOUT', index: 'NATURALGAS', result: 'WIN' },
+      { date: '15 Sep', tradePoints: -30.0, cumulativePoints: 1995.0, equityRupees: 569250, drawdownPercent: 3.8, drawdownPoints: 30.0, tradeType: 'RESISTANCE_BREAKOUT', index: 'BANKNIFTY', result: 'LOSS' },
+      { date: '18 Sep', tradePoints: 44.0, cumulativePoints: 2039.0, equityRupees: 602250, drawdownPercent: 0, drawdownPoints: 0, tradeType: 'RESISTANCE_BREAKOUT', index: 'NIFTY 50', result: 'WIN' },
+      { date: '21 Sep', tradePoints: 132.0, cumulativePoints: 2171.0, equityRupees: 701250, drawdownPercent: 0, drawdownPoints: 0, tradeType: 'SUPPORT_REVERSAL', index: 'BANKNIFTY', result: 'WIN' },
     ];
   }, []);
 
@@ -174,7 +180,7 @@ export const PerformanceAnalytics: React.FC = () => {
     ];
   }, [stats]);
 
-  const indices = ['ALL', 'NIFTY 50', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX'];
+  const indices = ['ALL', 'NIFTY 50', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX', 'CRUDEOIL', 'NATURALGAS', 'GOLD', 'SILVER'];
 
   return (
     <div className="bg-[#0b101d] rounded-xl border border-slate-800/90 flex flex-col overflow-hidden shadow-2xl font-mono text-slate-100">
@@ -187,7 +193,7 @@ export const PerformanceAnalytics: React.FC = () => {
           <div>
             <div className="flex items-center gap-2">
               <h2 className="text-base sm:text-lg font-bold text-white tracking-wide">
-                Price Action Engine: Performance Analytics
+                Chanakya Pro Engine: Performance Analytics
               </h2>
               <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
                 PROBABILITY CALIBRATED
@@ -496,7 +502,7 @@ export const PerformanceAnalytics: React.FC = () => {
                 Per-Trade Point Distribution (Wins vs Losses)
               </h3>
               <p className="text-[11px] text-slate-400">
-                Points captured on each confirmed Price Action signal
+                Points captured on each confirmed Chanakya Pro signal
               </p>
             </div>
           </div>

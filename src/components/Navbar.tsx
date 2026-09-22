@@ -17,6 +17,9 @@ import {
   FileText,
   Zap,
   RefreshCw,
+  Shield,
+  User,
+  Sparkles,
 } from 'lucide-react';
 import { useTrading } from '../context/TradingContext';
 
@@ -26,6 +29,7 @@ interface NavbarProps {
   onOpenSubscriptionModal: () => void;
   onOpenAlertsModal: () => void;
   onOpenSebiDocModal: () => void;
+  onOpenAuthModal?: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -34,6 +38,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenSubscriptionModal,
   onOpenAlertsModal,
   onOpenSebiDocModal,
+  onOpenAuthModal,
 }) => {
   const {
     tickers,
@@ -55,27 +60,38 @@ export const Navbar: React.FC<NavbarProps> = ({
     refreshLiveQuotes,
     tickFlashMap,
     lastTickTime,
+    userSession,
+    isAdmin,
+    isDemoUser,
   } = useTrading();
 
   const [showNotifications, setShowNotifications] = useState(false);
   const unreadCount = notifications.filter(n => !n.read).length;
   const activeAlertsCount = alerts.filter(a => !a.triggered).length;
 
-  // Major benchmark and global indices for top marquee ticker tape
+  // Major benchmark, MCX commodities, and global indices for top marquee ticker tape
   const tapeSymbols = [
     'NIFTY 50',
     'BANKNIFTY',
     'FINNIFTY',
     'MIDCPNIFTY',
     'SENSEX',
+    'BANKEX',
+    'CRUDEOIL',
+    'NATURALGAS',
+    'GOLD',
+    'SILVER',
+    'COPPER',
+    'ZINC',
     'INDIA VIX',
     'GIFT NIFTY',
+    'RELIANCE',
+    'HDFCBANK',
+    'INFY',
+    'TCS',
     'S&P 500',
     'NASDAQ 100',
     'DOW JONES',
-    'CRUDE OIL',
-    'GOLD SPOT',
-    'USD/INR',
   ];
   const tapeTickers = tapeSymbols
     .map(sym => tickers.find(t => t.symbol.toUpperCase() === sym.toUpperCase()))
@@ -84,8 +100,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   return (
     <header className="sticky top-0 z-40 bg-[#090e1a]/95 backdrop-blur-md border-b border-slate-800/80">
       {/* Top Ticker Tape */}
-      <div className="bg-[#060a12] border-b border-slate-800/60 px-3 py-1.5 overflow-x-auto scrollbar-none flex items-center gap-4 text-xs font-mono">
-        <div className="flex items-center gap-2 shrink-0">
+      <div className="bg-[#060a12] border-b border-slate-800/60 px-3 py-1.5 flex items-center gap-3 text-xs font-mono overflow-hidden">
+        <div className="flex items-center gap-2 shrink-0 z-10 bg-[#060a12] pr-2 border-r border-slate-800/80">
           <button
             type="button"
             onClick={() => setSimulationEnabled(!simulationEnabled)}
@@ -106,46 +122,49 @@ export const Navbar: React.FC<NavbarProps> = ({
           </button>
         </div>
 
-        <div className="flex items-center gap-4 shrink-0">
-          {tapeTickers.map(ticker => {
-            const isPositive = ticker.change >= 0;
-            const flash = tickFlashMap[ticker.symbol];
-            const isSelected = activeSymbol === ticker.symbol;
+        {/* Smooth Scrolling Ticker Loop Container */}
+        <div className="flex-1 overflow-hidden relative">
+          <div className="animate-marquee-tape flex items-center gap-4">
+            {[...tapeTickers, ...tapeTickers].map((ticker, index) => {
+              const isPositive = ticker.change >= 0;
+              const flash = tickFlashMap[ticker.symbol];
+              const isSelected = activeSymbol === ticker.symbol;
 
-            return (
-              <button
-                key={ticker.symbol}
-                onClick={() => setActiveSymbol(ticker.symbol)}
-                className={`flex items-center gap-2 px-2.5 py-1 rounded transition-all cursor-pointer ${
-                  isSelected
-                    ? 'bg-slate-800 text-cyan-300 ring-1 ring-cyan-500/60 font-semibold'
-                    : flash === 'UP'
-                    ? 'bg-emerald-950/70 ring-1 ring-emerald-500/60'
-                    : flash === 'DOWN'
-                    ? 'bg-rose-950/70 ring-1 ring-rose-500/60'
-                    : 'hover:bg-slate-800/50 bg-slate-900/40'
-                }`}
-              >
-                <span className="text-slate-300 font-bold">{ticker.symbol}</span>
-                <span className={`font-bold transition-colors ${
-                  flash === 'UP' ? 'text-emerald-300' : flash === 'DOWN' ? 'text-rose-300' : 'text-white'
-                }`}>
-                  {ticker.currency === 'USD' ? '$' : '₹'}
-                  {ticker.ltp.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                </span>
-                <span
-                  className={`text-[10px] font-bold px-1 py-0.2 rounded flex items-center ${
-                    isPositive
-                      ? 'bg-emerald-950/60 text-emerald-400 border border-emerald-500/30'
-                      : 'bg-rose-950/60 text-rose-400 border border-rose-500/30'
+              return (
+                <button
+                  key={`${ticker.symbol}-${index}`}
+                  onClick={() => setActiveSymbol(ticker.symbol)}
+                  className={`flex items-center gap-2 px-2.5 py-1 rounded transition-all cursor-pointer shrink-0 ${
+                    isSelected
+                      ? 'bg-slate-800 text-cyan-300 ring-1 ring-cyan-500/60 font-semibold'
+                      : flash === 'UP'
+                      ? 'bg-emerald-950/70 ring-1 ring-emerald-500/60'
+                      : flash === 'DOWN'
+                      ? 'bg-rose-950/70 ring-1 ring-rose-500/60'
+                      : 'hover:bg-slate-800/50 bg-slate-900/40'
                   }`}
                 >
-                  {isPositive ? '+' : ''}
-                  {ticker.changePercent.toFixed(2)}%
-                </span>
-              </button>
-            );
-          })}
+                  <span className="text-slate-300 font-bold">{ticker.symbol}</span>
+                  <span className={`font-bold transition-colors ${
+                    flash === 'UP' ? 'text-emerald-300' : flash === 'DOWN' ? 'text-rose-300' : 'text-white'
+                  }`}>
+                    {ticker.currency === 'USD' ? '$' : '₹'}
+                    {ticker.ltp.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                  </span>
+                  <span
+                    className={`text-[10px] font-bold px-1 py-0.2 rounded flex items-center ${
+                      isPositive
+                        ? 'bg-emerald-950/60 text-emerald-400 border border-emerald-500/30'
+                        : 'bg-rose-950/60 text-rose-400 border border-rose-500/30'
+                    }`}
+                  >
+                    {isPositive ? '+' : ''}
+                    {ticker.changePercent.toFixed(2)}%
+                  </span>
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         {/* Live Status & Quick Refresh Controls */}
@@ -173,7 +192,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             <div>
               <div className="flex items-center gap-2">
                 <span className="font-extrabold text-base tracking-tight text-white font-mono">
-                  SHAREMARKET<span className="text-cyan-400">.PRO</span>
+                  CHANAKYA<span className="text-cyan-400">.PRO</span>
                 </span>
                 <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-cyan-950/80 text-cyan-300 border border-cyan-800/60 uppercase">
                   F&amp;O TERMINAL
@@ -299,107 +318,120 @@ export const Navbar: React.FC<NavbarProps> = ({
             )}
           </div>
 
-          {/* Paper / Live Broker Execution Mode Toggle Switch */}
-          <div
-            id="navbar-broker-mode-toggle"
-            className="flex items-center bg-[#070c18] p-1 rounded-lg border border-slate-700/90 font-mono shadow-inner"
-            title="Toggle between Virtual Paper Trading and Live Angel One Broker Orders"
-          >
-            <button
-              type="button"
-              onClick={() => setBrokerMode('PAPER')}
-              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold transition cursor-pointer ${
-                brokerMode === 'PAPER'
-                  ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/60 shadow-md shadow-emerald-950/80'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <FileText className="h-3.5 w-3.5 text-emerald-400" />
-              <span>Paper Trade</span>
-              <span className="hidden xl:inline text-[9px] px-1.5 py-0.5 rounded bg-emerald-900/50 text-emerald-300 font-normal">
-                Virtual ₹2.45L
-              </span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                if (!brokerConnected) {
-                  onOpenBrokerAuth();
-                } else {
-                  setBrokerMode('ANGELONE');
-                }
-              }}
-              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold transition cursor-pointer ${
-                brokerMode === 'ANGELONE'
-                  ? 'bg-rose-950 text-rose-300 border border-rose-500/60 shadow-md shadow-rose-950/80'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Zap className={`h-3.5 w-3.5 ${brokerMode === 'ANGELONE' ? 'text-rose-400 animate-pulse' : 'text-amber-400'}`} />
-              <span>Live Broker</span>
-              <span className="hidden xl:inline text-[9px] px-1.5 py-0.5 rounded bg-rose-900/50 text-rose-300 font-normal">
-                Angel One
-              </span>
-            </button>
-          </div>
-
-          {/* Broker Connection & Auto-TOTP Pill */}
-          <button
-            onClick={onOpenBrokerAuth}
-            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-semibold transition cursor-pointer ${
-              brokerConnected
-                ? 'border-cyan-500/50 bg-cyan-950/50 text-cyan-300 hover:bg-cyan-900/50'
-                : 'border-amber-500/50 bg-amber-950/40 text-amber-300 hover:bg-amber-900/40'
-            }`}
-            title="Angel One SmartAPI Auto-TOTP & MPIN Session"
-          >
-            <span className={`h-2 w-2 rounded-full ${brokerConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
-            <span className="hidden sm:inline font-mono">
-              {brokerConnected ? 'SmartAPI: Connected' : 'Connect SmartAPI'}
-            </span>
-            <span className="px-1.5 py-0.5 rounded bg-slate-900 text-[10px] font-mono text-cyan-400 border border-cyan-500/30">
-              Auto-TOTP
-            </span>
-          </button>
-
-          {/* 15-Day Free Trial / Subscription Pill */}
-          <button
-            onClick={onOpenSubscriptionModal}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold transition ${
-              subscription.isTrial
-                ? 'border-amber-500/40 bg-amber-950/40 text-amber-300 hover:bg-amber-900/40'
-                : 'border-cyan-500/40 bg-cyan-950/40 text-cyan-300 hover:bg-cyan-900/40'
-            }`}
-          >
-            {subscription.isTrial ? (
-              <>
-                <Clock className="h-3.5 w-3.5 text-amber-400" />
-                <span>
-                  <span className="hidden sm:inline">Demo Trial: </span>
-                  <span className="text-white font-mono font-bold">{subscription.trialDaysLeft}d Left</span>
+          {/* Role-Specific Controls */}
+          {isDemoUser ? (
+            <>
+              {/* Demo User Badge */}
+              <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-950/70 border border-blue-500/40 text-blue-300 text-xs font-mono">
+                <User className="h-3.5 w-3.5 text-blue-400" />
+                <span className="font-bold">{userSession.name || 'Demo User'}</span>
+                <span className="hidden sm:inline text-[10px] px-1.5 py-0.5 rounded bg-blue-900/60 text-blue-200">
+                  Index Signals Only
                 </span>
-                <span className="hidden lg:inline text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-200 border border-amber-500/30">
-                  Upgrade (Razorpay)
-                </span>
-              </>
-            ) : (
-              <>
-                <CreditCard className="h-3.5 w-3.5 text-cyan-400" />
-                <span className="font-mono text-cyan-200">PRO ACTIVE</span>
-              </>
-            )}
-          </button>
+              </div>
 
-          {/* Developer Option Button */}
-          <button
-            onClick={onOpenDeveloperModal}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-indigo-500/40 bg-indigo-950/40 text-indigo-300 hover:bg-indigo-900/40 text-xs font-semibold transition"
-            title="Developer Settings & Audit Trail Logs"
-          >
-            <Code2 className="h-3.5 w-3.5 text-indigo-400" />
-            <span className="hidden md:inline">Dev Options</span>
-          </button>
+              {/* Admin Login Button */}
+              <button
+                type="button"
+                onClick={onOpenAuthModal}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-amber-500/70 bg-gradient-to-r from-amber-500/20 to-amber-600/30 hover:from-amber-500/30 hover:to-amber-600/40 text-amber-300 text-xs font-bold transition shadow-sm cursor-pointer"
+                title="Login with Administrator credentials for full terminal access"
+              >
+                <Shield className="h-3.5 w-3.5 text-amber-400" />
+                <span>Admin Login</span>
+              </button>
+            </>
+          ) : (
+            <>
+              {/* Administrator Unlimited Pro Badge */}
+              <button
+                type="button"
+                onClick={onOpenAuthModal}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-amber-500/60 bg-gradient-to-r from-amber-950/80 via-slate-900 to-amber-950/80 text-amber-300 hover:border-amber-400 text-xs font-bold transition shadow-md shadow-amber-950/40 cursor-pointer"
+                title="Administrator Session: Unlimited Pro Trial Active. Click to manage."
+              >
+                <Shield className="h-3.5 w-3.5 text-amber-400" />
+                <span>Admin: DCP Studio</span>
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-200 border border-amber-500/40 font-mono font-bold">
+                  👑 UNLIMITED
+                </span>
+              </button>
+
+              {/* Paper / Live Broker Execution Mode Toggle Switch */}
+              <div
+                id="navbar-broker-mode-toggle"
+                className="flex items-center bg-[#070c18] p-1 rounded-lg border border-slate-700/90 font-mono shadow-inner"
+                title="Toggle between Virtual Paper Trading and Live Angel One Broker Orders"
+              >
+                <button
+                  type="button"
+                  onClick={() => setBrokerMode('PAPER')}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold transition cursor-pointer ${
+                    brokerMode === 'PAPER'
+                      ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/60 shadow-md shadow-emerald-950/80'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <FileText className="h-3.5 w-3.5 text-emerald-400" />
+                  <span>Paper Trade</span>
+                  <span className="hidden xl:inline text-[9px] px-1.5 py-0.5 rounded bg-emerald-900/50 text-emerald-300 font-normal">
+                    Virtual ₹2.45L
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!brokerConnected) {
+                      onOpenBrokerAuth();
+                    } else {
+                      setBrokerMode('ANGELONE');
+                    }
+                  }}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold transition cursor-pointer ${
+                    brokerMode === 'ANGELONE'
+                      ? 'bg-rose-950 text-rose-300 border border-rose-500/60 shadow-md shadow-rose-950/80'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <Zap className={`h-3.5 w-3.5 ${brokerMode === 'ANGELONE' ? 'text-rose-400 animate-pulse' : 'text-amber-400'}`} />
+                  <span>Live Broker</span>
+                  <span className="hidden xl:inline text-[9px] px-1.5 py-0.5 rounded bg-rose-900/50 text-rose-300 font-normal">
+                    Angel One
+                  </span>
+                </button>
+              </div>
+
+              {/* Broker Connection & Auto-TOTP Pill */}
+              <button
+                onClick={onOpenBrokerAuth}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-semibold transition cursor-pointer ${
+                  brokerConnected
+                    ? 'border-cyan-500/50 bg-cyan-950/50 text-cyan-300 hover:bg-cyan-900/50'
+                    : 'border-amber-500/50 bg-amber-950/40 text-amber-300 hover:bg-amber-900/40'
+                }`}
+                title="Angel One SmartAPI Auto-TOTP & MPIN Session"
+              >
+                <span className={`h-2 w-2 rounded-full ${brokerConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
+                <span className="hidden sm:inline font-mono">
+                  {brokerConnected ? 'SmartAPI: Connected' : 'Connect SmartAPI'}
+                </span>
+                <span className="px-1.5 py-0.5 rounded bg-slate-900 text-[10px] font-mono text-cyan-400 border border-cyan-500/30">
+                  Auto-TOTP
+                </span>
+              </button>
+
+              {/* Developer Option Button */}
+              <button
+                onClick={onOpenDeveloperModal}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-indigo-500/40 bg-indigo-950/40 text-indigo-300 hover:bg-indigo-900/40 text-xs font-semibold transition cursor-pointer"
+                title="Developer Settings & Audit Trail Logs"
+              >
+                <Code2 className="h-3.5 w-3.5 text-indigo-400" />
+                <span className="hidden md:inline">Dev Options</span>
+              </button>
+            </>
+          )}
         </div>
       </div>
     </header>

@@ -21,10 +21,32 @@ interface OptionChainProps {
 export const OptionChain: React.FC<OptionChainProps> = ({ onSelectOptionTrade }) => {
   const { activeSymbol, tickers } = useTrading();
   
-  // Preferred F&O underlying index
-  const [selectedUnderlying, setSelectedUnderlying] = useState<string>(
-    activeSymbol === 'BANKNIFTY' ? 'BANKNIFTY' : activeSymbol === 'FINNIFTY' ? 'FINNIFTY' : 'NIFTY 50'
-  );
+  const underlyingOptions = [
+    'NIFTY 50',
+    'BANKNIFTY',
+    'FINNIFTY',
+    'MIDCPNIFTY',
+    'SENSEX',
+    'CRUDEOIL',
+    'NATURALGAS',
+    'GOLD',
+    'SILVER',
+  ];
+
+  // Preferred F&O underlying index or commodity
+  const [selectedUnderlying, setSelectedUnderlying] = useState<string>(() => {
+    const matched = underlyingOptions.find(sym => sym.toUpperCase() === activeSymbol.toUpperCase());
+    return matched || 'NIFTY 50';
+  });
+
+  // Keep selectedUnderlying in sync if activeSymbol changes from marquee or watchlist
+  useEffect(() => {
+    const matched = underlyingOptions.find(sym => sym.toUpperCase() === activeSymbol.toUpperCase());
+    if (matched && matched !== selectedUnderlying) {
+      setSelectedUnderlying(matched);
+    }
+  }, [activeSymbol]);
+
   const [selectedExpiry, setSelectedExpiry] = useState<string>('Current Weekly (26-SEP-2024)');
   const [chainData, setChainData] = useState<OptionChainData | null>(null);
   const [loading, setLoading] = useState(false);
@@ -64,18 +86,18 @@ export const OptionChain: React.FC<OptionChainProps> = ({ onSelectOptionTrade })
       {/* Top Chain Header Bar */}
       <div className="p-3 border-b border-slate-800/80 flex flex-wrap items-center justify-between gap-3">
         {/* Underlying Selector & LTP */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap">
           <div className="flex items-center gap-1.5 font-bold text-xs uppercase tracking-wider text-slate-200">
             <Zap className="h-4 w-4 text-cyan-400" />
             F&amp;O Options Chain
           </div>
 
-          <div className="flex items-center p-0.5 bg-slate-900 rounded-lg border border-slate-800 text-xs font-mono font-bold">
-            {(['NIFTY 50', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX'] as const).map(sym => (
+          <div className="flex items-center p-0.5 bg-slate-900 rounded-lg border border-slate-800 text-xs font-mono font-bold overflow-x-auto max-w-full">
+            {underlyingOptions.map(sym => (
               <button
                 key={sym}
                 onClick={() => setSelectedUnderlying(sym)}
-                className={`px-2.5 py-1 rounded transition cursor-pointer ${
+                className={`px-2.5 py-1 rounded transition cursor-pointer whitespace-nowrap ${
                   selectedUnderlying === sym
                     ? 'bg-cyan-500 text-slate-950 font-extrabold shadow-sm'
                     : 'text-slate-400 hover:text-white'

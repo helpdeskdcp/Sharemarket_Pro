@@ -46,3 +46,23 @@
 .tick-flash-down {
   animation: flashRed 0.6s ease-out;
 }
+
+@keyframes marqueeScroll {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
+.animate-marquee-tape {
+  display: flex;
+  width: max-content;
+  animation: marqueeScroll 45s linear infinite;
+  will-change: transform;
+}
+
+.animate-marquee-tape:hover {
+  animation-play-state: paused;
+}

@@ -14,6 +14,7 @@ import {
   Activity,
   CheckCircle2,
   X,
+  Flame,
 } from 'lucide-react';
 import { useTrading } from '../context/TradingContext';
 import { Ticker } from '../types/market';
@@ -28,6 +29,16 @@ const TOKEN_BADGES: Record<string, string> = {
   'SENSEX': '99919000',
   'BANKEX': '99919012',
   'INDIA VIX': '99926017',
+  'NATURALGAS': 'MCX_NG',
+  'NATURALGASMINI': 'MCX_NGM',
+  'CRUDEOIL': 'MCX_CRUDE',
+  'CRUDEOILMINI': 'MCX_CRDM',
+  'GOLD': 'MCX_GOLD',
+  'GOLDMINI': 'MCX_GLDM',
+  'SILVER': 'MCX_SILVER',
+  'SILVERMINI': 'MCX_SLVM',
+  'COPPER': 'MCX_COPPER',
+  'ZINC': 'MCX_ZINC',
   'RELIANCE': '2885',
   'HDFCBANK': '1333',
   'INFY': '1594',
@@ -77,8 +88,12 @@ export const Watchlist: React.FC<WatchlistProps> = ({ onQuickOrder, onClose, ful
     if (watchlistType === 'FO') {
       return (
         ticker.instrumentType === 'INDEX' ||
+        ticker.exchange === 'MCX' ||
         ['RELIANCE', 'HDFCBANK', 'INFY', 'TATAMOTORS', 'SBIN', 'ICICIBANK', 'BHARTIARTL', 'TCS'].includes(ticker.symbol)
       );
+    }
+    if (watchlistType === 'MCX') {
+      return ticker.exchange === 'MCX' || ticker.instrumentType === 'COMMODITY';
     }
     if (watchlistType === 'GLOBAL') {
       return ticker.instrumentType === 'GLOBAL';
@@ -198,6 +213,7 @@ export const Watchlist: React.FC<WatchlistProps> = ({ onQuickOrder, onClose, ful
                 { id: 'INDICES' as const, label: 'Key Indices', icon: Layers },
                 { id: 'NIFTY50' as const, label: 'Nifty 50 Stocks', icon: Activity },
                 { id: 'FO' as const, label: 'F&O Derivatives', icon: Zap },
+                { id: 'MCX' as const, label: 'MCX Commodities', icon: Flame },
                 { id: 'GLOBAL' as const, label: 'Global Markets', icon: Globe },
                 { id: 'CUSTOM' as const, label: `Custom Starred (${customWatchlist.length})`, icon: Star },
               ].map(tab => {
@@ -575,10 +591,10 @@ export const Watchlist: React.FC<WatchlistProps> = ({ onQuickOrder, onClose, ful
         </div>
 
         {/* Tab Buttons */}
-        <div className="grid grid-cols-5 gap-1 p-0.5 bg-slate-900/90 rounded-lg border border-slate-800 text-xs">
+        <div className="grid grid-cols-6 gap-1 p-0.5 bg-slate-900/90 rounded-lg border border-slate-800 text-xs">
           <button
             onClick={() => setWatchlistType('INDICES')}
-            className={`py-1.5 px-1.5 rounded-md font-bold transition text-center truncate cursor-pointer ${
+            className={`py-1.5 px-1 rounded-md font-bold transition text-center truncate cursor-pointer ${
               watchlistType === 'INDICES'
                 ? 'bg-slate-800 text-cyan-400 shadow-sm border border-cyan-500/30'
                 : 'text-slate-400 hover:text-slate-200'
@@ -588,7 +604,7 @@ export const Watchlist: React.FC<WatchlistProps> = ({ onQuickOrder, onClose, ful
           </button>
           <button
             onClick={() => setWatchlistType('NIFTY50')}
-            className={`py-1.5 px-1.5 rounded-md font-semibold transition text-center truncate cursor-pointer ${
+            className={`py-1.5 px-1 rounded-md font-semibold transition text-center truncate cursor-pointer ${
               watchlistType === 'NIFTY50'
                 ? 'bg-slate-800 text-cyan-400 shadow-sm'
                 : 'text-slate-400 hover:text-slate-200'
@@ -598,7 +614,7 @@ export const Watchlist: React.FC<WatchlistProps> = ({ onQuickOrder, onClose, ful
           </button>
           <button
             onClick={() => setWatchlistType('FO')}
-            className={`py-1.5 px-1.5 rounded-md font-semibold transition text-center truncate cursor-pointer ${
+            className={`py-1.5 px-1 rounded-md font-semibold transition text-center truncate cursor-pointer ${
               watchlistType === 'FO'
                 ? 'bg-slate-800 text-cyan-400 shadow-sm'
                 : 'text-slate-400 hover:text-slate-200'
@@ -607,26 +623,36 @@ export const Watchlist: React.FC<WatchlistProps> = ({ onQuickOrder, onClose, ful
             F&amp;O
           </button>
           <button
+            onClick={() => setWatchlistType('MCX')}
+            className={`py-1.5 px-1 rounded-md font-semibold transition text-center truncate cursor-pointer ${
+              watchlistType === 'MCX'
+                ? 'bg-slate-800 text-amber-400 shadow-sm border border-amber-500/30'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            MCX
+          </button>
+          <button
             onClick={() => setWatchlistType('GLOBAL')}
-            className={`py-1.5 px-1.5 rounded-md font-semibold transition text-center truncate flex items-center justify-center gap-1 cursor-pointer ${
+            className={`py-1.5 px-1 rounded-md font-semibold transition text-center truncate flex items-center justify-center gap-0.5 cursor-pointer ${
               watchlistType === 'GLOBAL'
                 ? 'bg-slate-800 text-cyan-400 shadow-sm'
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
-            <Globe className="h-3 w-3" />
+            <Globe className="h-2.5 w-2.5" />
             Global
           </button>
           <button
             onClick={() => setWatchlistType('CUSTOM')}
-            className={`py-1.5 px-1.5 rounded-md font-semibold transition text-center truncate flex items-center justify-center gap-1 cursor-pointer ${
+            className={`py-1.5 px-1 rounded-md font-semibold transition text-center truncate flex items-center justify-center gap-0.5 cursor-pointer ${
               watchlistType === 'CUSTOM'
                 ? 'bg-slate-800 text-cyan-400 shadow-sm'
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
-            <Star className="h-3 w-3 text-amber-400" />
-            Custom
+            <Star className="h-2.5 w-2.5 text-amber-400" />
+            Star
           </button>
         </div>
 
