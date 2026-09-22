@@ -1,0 +1,8 @@
+{
+  "name": "scalpingpro",
+  "description": "Real-time share market trading platform with live multi-index feeds, F&O options chain analytics, SEBI-compliant probabilistic AI strategies, Angel One integration, and portfolio management.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
