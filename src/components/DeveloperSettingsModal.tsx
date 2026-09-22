@@ -16,10 +16,20 @@ import {
   Bell,
   MessageSquare,
   Smartphone,
+  BrainCircuit,
+  Cpu,
+  Zap,
+  Sliders,
+  ShieldCheck,
+  Activity,
+  Volume2,
+  Radio,
+  Sparkles,
 } from 'lucide-react';
 import { useTrading } from '../context/TradingContext';
 import { fetchDeveloperSettings, updateDeveloperSettings, fetchAuditLogs } from '../services/api';
-import { DeveloperSettings, AuditLog } from '../types/market';
+import { DeveloperSettings, AuditLog, EngineModelSettings } from '../types/market';
+import { DEFAULT_ENGINE_SETTINGS } from '../data/mockMarketData';
 
 interface DeveloperSettingsModalProps {
   isOpen: boolean;
@@ -32,7 +42,7 @@ export const DeveloperSettingsModal: React.FC<DeveloperSettingsModalProps> = ({
 }) => {
   const { setBrokerMode, webhookSettings, updateWebhookSettings, dispatchWebhookTest } = useTrading();
 
-  const [activeTab, setActiveTab] = useState<'API_CONFIG' | 'WEBHOOK_ALERTS' | 'AUDIT_LOGS'>('API_CONFIG');
+  const [activeTab, setActiveTab] = useState<'MODELS_ENGINES' | 'API_CONFIG' | 'WEBHOOK_ALERTS' | 'AUDIT_LOGS'>('MODELS_ENGINES');
   const [settings, setSettings] = useState<DeveloperSettings | null>(null);
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [logFilter, setLogFilter] = useState('ALL');
@@ -45,15 +55,33 @@ export const DeveloperSettingsModal: React.FC<DeveloperSettingsModalProps> = ({
   // Load developer config & logs on modal open
   useEffect(() => {
     if (isOpen) {
-      fetchDeveloperSettings().then(data => setSettings(data));
+      fetchDeveloperSettings().then(data => {
+        setSettings({
+          ...data,
+          engines: data.engines || DEFAULT_ENGINE_SETTINGS,
+        });
+      });
       fetchAuditLogs().then(data => setLogs(data));
     }
   }, [isOpen]);
 
   if (!isOpen) return null;
 
-  const handleSaveSettings = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleToggleEngine = (engineKey: keyof EngineModelSettings) => {
+    if (!settings) return;
+    const currentEngines = settings.engines || DEFAULT_ENGINE_SETTINGS;
+    const updatedEngines = {
+      ...currentEngines,
+      [engineKey]: !currentEngines[engineKey],
+    };
+    setSettings({
+      ...settings,
+      engines: updatedEngines,
+    });
+  };
+
+  const handleSaveSettings = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     if (!settings) return;
     setSaving(true);
     setSaveSuccess(false);
@@ -116,12 +144,24 @@ export const DeveloperSettingsModal: React.FC<DeveloperSettingsModalProps> = ({
         </div>
 
         {/* Tab Selection */}
-        <div className="flex items-center px-4 border-b border-slate-800 bg-[#0c1222]">
+        <div className="flex items-center px-4 border-b border-slate-800 bg-[#0c1222] overflow-x-auto scrollbar-none">
+          <button
+            onClick={() => setActiveTab('MODELS_ENGINES')}
+            className={`py-2.5 px-3 text-xs font-bold font-mono transition border-b-2 flex items-center gap-2 whitespace-nowrap ${
+              activeTab === 'MODELS_ENGINES'
+                ? 'border-indigo-400 text-indigo-400 bg-indigo-950/20'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <Cpu className="h-3.5 w-3.5 text-indigo-400" />
+            AI Models &amp; Strategy Engines (ON/OFF)
+          </button>
+
           <button
             onClick={() => setActiveTab('API_CONFIG')}
-            className={`py-2.5 px-3 text-xs font-bold font-mono transition border-b-2 flex items-center gap-2 ${
+            className={`py-2.5 px-3 text-xs font-bold font-mono transition border-b-2 flex items-center gap-2 whitespace-nowrap ${
               activeTab === 'API_CONFIG'
-                ? 'border-indigo-400 text-indigo-400'
+                ? 'border-indigo-400 text-indigo-400 bg-indigo-950/20'
                 : 'border-transparent text-slate-400 hover:text-slate-200'
             }`}
           >
@@ -131,9 +171,9 @@ export const DeveloperSettingsModal: React.FC<DeveloperSettingsModalProps> = ({
 
           <button
             onClick={() => setActiveTab('WEBHOOK_ALERTS')}
-            className={`py-2.5 px-3 text-xs font-bold font-mono transition border-b-2 flex items-center gap-2 ${
+            className={`py-2.5 px-3 text-xs font-bold font-mono transition border-b-2 flex items-center gap-2 whitespace-nowrap ${
               activeTab === 'WEBHOOK_ALERTS'
-                ? 'border-indigo-400 text-indigo-400'
+                ? 'border-indigo-400 text-indigo-400 bg-indigo-950/20'
                 : 'border-transparent text-slate-400 hover:text-slate-200'
             }`}
           >
@@ -143,9 +183,9 @@ export const DeveloperSettingsModal: React.FC<DeveloperSettingsModalProps> = ({
 
           <button
             onClick={() => setActiveTab('AUDIT_LOGS')}
-            className={`py-2.5 px-3 text-xs font-bold font-mono transition border-b-2 flex items-center gap-2 ${
+            className={`py-2.5 px-3 text-xs font-bold font-mono transition border-b-2 flex items-center gap-2 whitespace-nowrap ${
               activeTab === 'AUDIT_LOGS'
-                ? 'border-indigo-400 text-indigo-400'
+                ? 'border-indigo-400 text-indigo-400 bg-indigo-950/20'
                 : 'border-transparent text-slate-400 hover:text-slate-200'
             }`}
           >
@@ -153,6 +193,203 @@ export const DeveloperSettingsModal: React.FC<DeveloperSettingsModalProps> = ({
             User Audit Logs ({logs.length})
           </button>
         </div>
+
+        {/* Tab 0: AI Models & Strategy Engines (ON/OFF Toggle Switches) */}
+        {activeTab === 'MODELS_ENGINES' && settings && (
+          <div className="p-4 sm:p-5 overflow-y-auto space-y-4 font-mono text-xs max-h-[75vh]">
+            <div className="p-3 rounded-xl bg-indigo-950/30 border border-indigo-500/30 flex items-center justify-between">
+              <div>
+                <span className="font-bold text-indigo-200 text-xs flex items-center gap-1.5">
+                  <BrainCircuit className="h-4 w-4 text-indigo-400" />
+                  Live Engine Pipeline &amp; Algorithmic Switchboard
+                </span>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  Toggle individual calculation pipelines, machine learning models, and real-time data feeds in Developer Mode.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => handleSaveSettings()}
+                disabled={saving}
+                className="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold text-xs flex items-center gap-1.5 shadow-md shadow-indigo-600/30 transition shrink-0"
+              >
+                {saving ? (
+                  <>
+                    <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                    <span>Saving...</span>
+                  </>
+                ) : (
+                  <>
+                    <Save className="h-3.5 w-3.5" />
+                    <span>Save Engine State</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+            {saveSuccess && (
+              <div className="p-2.5 rounded-lg bg-emerald-950/80 border border-emerald-500/50 text-emerald-300 flex items-center gap-2">
+                <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
+                <span>Engine switches saved and applied to active terminal pipelines!</span>
+              </div>
+            )}
+
+            {/* Engines List */}
+            <div className="space-y-2.5">
+              {[
+                {
+                  key: 'priceActionEngine' as const,
+                  name: 'Price Action Strategy Engine (v4.2)',
+                  desc: 'Resistance & Support breakout/reversal confirmation, candle wick exhaustion & 1-4 high-conviction daily signals.',
+                  badge: 'v4.2 Core Engine',
+                  badgeColor: 'text-amber-400 bg-amber-950/80 border-amber-800',
+                  icon: Zap,
+                  latency: '12ms',
+                },
+                {
+                  key: 'geminiRegimeClassifier' as const,
+                  name: 'Gemini 3.8 Flash AI Market Regime Model',
+                  desc: 'Server-side neural macroeconomic reasoning, real-time sentiment extraction & volatility regime clustering.',
+                  badge: 'Google GenAI SDK',
+                  badgeColor: 'text-indigo-400 bg-indigo-950/80 border-indigo-800',
+                  icon: BrainCircuit,
+                  latency: '42ms',
+                },
+                {
+                  key: 'adaptiveTargetEngine' as const,
+                  name: 'Adaptive Dynamic Target Ratio (1:1.5 - 1:4.0)',
+                  desc: 'Mathematical risk-to-reward multi-tier target calculator (T1 conservative, T2 balanced, T3/T4 runner targets).',
+                  badge: 'Dynamic R:R',
+                  badgeColor: 'text-emerald-400 bg-emerald-950/80 border-emerald-800',
+                  icon: Sliders,
+                  latency: '6ms',
+                },
+                {
+                  key: 'angelOneWsFeed' as const,
+                  name: 'Angel One SmartAPI Real-time WebSocket Feed',
+                  desc: 'Sub-second tick stream for NSE/BSE cash equities, indices & active F&O strike contracts.',
+                  badge: 'Smart-Stream 2.0',
+                  badgeColor: 'text-cyan-400 bg-cyan-950/80 border-cyan-800',
+                  icon: Radio,
+                  latency: '15ms',
+                },
+                {
+                  key: 'optionsGreeksEngine' as const,
+                  name: 'Black-Scholes Options Greeks Engine',
+                  desc: 'Real-time computation of option Delta, Theta decay rate, Vega sensitivity, Gamma, and Implied Volatility (IV).',
+                  badge: 'Black-Scholes Math',
+                  badgeColor: 'text-purple-400 bg-purple-950/80 border-purple-800',
+                  icon: Layers,
+                  latency: '18ms',
+                },
+                {
+                  key: 'd3SentimentPhysics' as const,
+                  name: 'D3 Radial Sentiment & Momentum Physics Model',
+                  desc: 'Kinetic interpolation physics for interactive multi-segment market euphoria and fear gauges.',
+                  badge: 'D3 Physics (60 FPS)',
+                  badgeColor: 'text-blue-400 bg-blue-950/80 border-blue-800',
+                  icon: Activity,
+                  latency: '16ms',
+                },
+                {
+                  key: 'volatilityTrapScanner' as const,
+                  name: 'Volatility Trap & False Breakout Scanner',
+                  desc: 'Filters out liquidity sweeps and low-volume fake wicks before trade signals are dispatched.',
+                  badge: 'Trap Defense',
+                  badgeColor: 'text-rose-400 bg-rose-950/80 border-rose-800',
+                  icon: Cpu,
+                  latency: '9ms',
+                },
+                {
+                  key: 'sebiGuardrails' as const,
+                  name: 'SEBI Statutory Compliance & Guardrail Filters',
+                  desc: 'Mandatory risk disclosures, 15-day trial enforcement, maximum risk margin checks & immutable audit logs.',
+                  badge: 'Statutory Shield',
+                  badgeColor: 'text-emerald-400 bg-emerald-950/80 border-emerald-800',
+                  icon: ShieldCheck,
+                  latency: '4ms',
+                },
+                {
+                  key: 'autoTrailingGtt' as const,
+                  name: 'Automated GTT & Trailing Stop Loss Engine',
+                  desc: 'Good-Till-Triggered order tracking with automatic trailing stop-loss points when price moves in your favor.',
+                  badge: 'Trailing Algo',
+                  badgeColor: 'text-amber-400 bg-amber-950/80 border-amber-800',
+                  icon: Sparkles,
+                  latency: '7ms',
+                },
+                {
+                  key: 'audioAlertEngine' as const,
+                  name: 'Real-time Audio Alert & Synthesizer Ping Engine',
+                  desc: 'Web Audio API oscillator creating crisp frequency pings on signal trigger, order execution, and alert breach.',
+                  badge: 'Web Audio Synth',
+                  badgeColor: 'text-teal-400 bg-teal-950/80 border-teal-800',
+                  icon: Volume2,
+                  latency: '2ms',
+                },
+              ].map((engine) => {
+                const isEnabled = settings.engines ? settings.engines[engine.key] !== false : true;
+                const Icon = engine.icon;
+                return (
+                  <div
+                    key={engine.key}
+                    className={`p-3 rounded-xl border transition flex items-center justify-between gap-3 ${
+                      isEnabled
+                        ? 'bg-[#0b101d] border-slate-700/80 hover:border-indigo-500/40'
+                        : 'bg-[#070a12] border-slate-900 opacity-60'
+                    }`}
+                  >
+                    <div className="flex items-start gap-3 min-w-0">
+                      <div
+                        className={`p-2 rounded-lg shrink-0 mt-0.5 ${
+                          isEnabled ? 'bg-indigo-950 text-indigo-400 border border-indigo-800/60' : 'bg-slate-900 text-slate-600'
+                        }`}
+                      >
+                        <Icon className="h-4 w-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-bold text-white text-xs">{engine.name}</span>
+                          <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${engine.badgeColor}`}>
+                            {engine.badge}
+                          </span>
+                          <span className="text-[10px] text-slate-500 font-mono">
+                            ⚡ {engine.latency}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-400 mt-0.5 line-clamp-1">{engine.desc}</p>
+                      </div>
+                    </div>
+
+                    {/* ON / OFF Toggle Switch */}
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span
+                        className={`text-[10px] font-bold font-mono ${
+                          isEnabled ? 'text-emerald-400' : 'text-slate-500'
+                        }`}
+                      >
+                        {isEnabled ? 'ACTIVE (ON)' : 'DISABLED (OFF)'}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleToggleEngine(engine.key)}
+                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500/50 ${
+                          isEnabled ? 'bg-indigo-600' : 'bg-slate-800'
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                            isEnabled ? 'translate-x-6' : 'translate-x-1'
+                          }`}
+                        />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Tab 1: API Configuration */}
         {activeTab === 'API_CONFIG' && settings && (
@@ -341,87 +578,260 @@ export const DeveloperSettingsModal: React.FC<DeveloperSettingsModalProps> = ({
           </form>
         )}
 
-        {/* Tab: Webhook Alerts Configuration */}
+        {/* Tab: Webhook & Telegram Alerts Configuration */}
         {activeTab === 'WEBHOOK_ALERTS' && (
           <div className="p-5 overflow-y-auto space-y-4 font-mono text-xs">
-            <div className="text-[11px] text-slate-400">
-              Configure real-time automated notifications dispatched upon GTT price execution, trailing stop-loss triggers, or market alerts.
+            <div className="flex items-center justify-between">
+              <div className="text-[11px] text-slate-400">
+                Configure real-time automated notifications &amp; Price Action signal broadcasting to your Telegram Channel.
+              </div>
+              <span className="text-[10px] px-2 py-0.5 rounded bg-sky-950/80 border border-sky-600/60 text-sky-300 font-bold">
+                Telegram Bot API 7.0
+              </span>
             </div>
 
-            {/* Telegram Channel */}
-            <div className="p-3.5 rounded-xl bg-[#090d16] border border-slate-800 space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <div className="p-1.5 rounded-lg bg-sky-500/20 text-sky-400">
-                    <Send className="h-4 w-4" />
+            {/* Telegram Channel Broadcaster */}
+            <div className="p-4 rounded-xl bg-[#090d16] border border-sky-500/30 space-y-4">
+              <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2 rounded-lg bg-sky-500/20 text-sky-400 border border-sky-500/40">
+                    <Send className="h-5 w-5" />
                   </div>
                   <div>
-                    <div className="text-white font-bold text-xs">Telegram Instant Broadcast</div>
-                    <div className="text-[10px] text-slate-400">Receive order triggers &amp; strategy alerts in your Telegram channel</div>
+                    <div className="text-white font-bold text-sm flex items-center gap-2">
+                      Telegram Strategy Signal Broadcaster
+                      <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-emerald-800">
+                        {webhookSettings.telegram.enabled ? 'ACTIVE (READY)' : 'MUTED'}
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-slate-400">
+                      Broadcast real-time Resistance Breakout &amp; Support Reversal signals directly to your Telegram Channel
+                    </div>
                   </div>
                 </div>
-                <label className="relative inline-flex items-center cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={webhookSettings.telegram.enabled}
-                    onChange={e =>
-                      updateWebhookSettings({
-                        telegram: { ...webhookSettings.telegram, enabled: e.target.checked },
-                      })
-                    }
-                    className="sr-only peer"
-                  />
-                  <div className="w-9 h-5 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-sky-600"></div>
-                </label>
+
+                {/* Master Telegram Broadcast Toggle */}
+                <div className="flex items-center gap-2">
+                  <span className={`text-[10px] font-bold ${webhookSettings.telegram.enabled ? 'text-sky-400' : 'text-slate-500'}`}>
+                    {webhookSettings.telegram.enabled ? 'BROADCAST ON' : 'DISABLED'}
+                  </span>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={webhookSettings.telegram.enabled}
+                      onChange={e =>
+                        updateWebhookSettings({
+                          ...webhookSettings,
+                          telegram: { ...webhookSettings.telegram, enabled: e.target.checked },
+                        })
+                      }
+                      className="sr-only peer"
+                    />
+                    <div className="w-10 h-5 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-sky-500"></div>
+                  </label>
+                </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
-                <div>
-                  <label className="text-[10px] text-slate-400 uppercase block mb-1">Telegram Bot Token</label>
+              {/* Bot Credentials & Channel Details */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div className="md:col-span-1">
+                  <label className="text-[10px] text-slate-300 font-bold uppercase block mb-1">
+                    Channel Display Name
+                  </label>
                   <input
                     type="text"
-                    value={webhookSettings.telegram.botToken}
+                    value={webhookSettings.telegram.channelName || ''}
                     onChange={e =>
                       updateWebhookSettings({
-                        telegram: { ...webhookSettings.telegram, botToken: e.target.value },
+                        ...webhookSettings,
+                        telegram: { ...webhookSettings.telegram, channelName: e.target.value },
                       })
                     }
-                    placeholder="bot123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
-                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-white font-mono focus:border-sky-500"
+                    placeholder="VIP Price Action Signals"
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:border-sky-500"
                   />
+                  <span className="text-[9px] text-slate-500 mt-0.5 block">Header name displayed on signals</span>
                 </div>
-                <div>
-                  <label className="text-[10px] text-slate-400 uppercase block mb-1">Chat ID / Channel Handle</label>
+
+                <div className="md:col-span-1">
+                  <label className="text-[10px] text-slate-300 font-bold uppercase block mb-1">
+                    Telegram Channel / Chat ID
+                  </label>
                   <input
                     type="text"
-                    value={webhookSettings.telegram.chatId}
+                    value={webhookSettings.telegram.chatId || ''}
                     onChange={e =>
                       updateWebhookSettings({
+                        ...webhookSettings,
                         telegram: { ...webhookSettings.telegram, chatId: e.target.value },
                       })
                     }
-                    placeholder="@AlphaTradesAlerts or -10012345678"
-                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-white font-mono focus:border-sky-500"
+                    placeholder="@my_channel or -10012345678"
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:border-sky-500"
                   />
+                  <span className="text-[9px] text-slate-500 mt-0.5 block">Channel username (e.g. @MyTradingVIP) or Chat ID</span>
+                </div>
+
+                <div className="md:col-span-1">
+                  <label className="text-[10px] text-slate-300 font-bold uppercase block mb-1">
+                    Telegram Bot Token (@BotFather)
+                  </label>
+                  <input
+                    type="text"
+                    value={webhookSettings.telegram.botToken || ''}
+                    onChange={e =>
+                      updateWebhookSettings({
+                        ...webhookSettings,
+                        telegram: { ...webhookSettings.telegram, botToken: e.target.value },
+                      })
+                    }
+                    placeholder="6891238491:AAH8kqZ_..."
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:border-sky-500"
+                  />
+                  <span className="text-[9px] text-slate-500 mt-0.5 block">Token from Telegram @BotFather</span>
                 </div>
               </div>
 
-              <div className="flex justify-end pt-1">
-                <button
-                  type="button"
-                  disabled={testingChannel === 'telegram'}
-                  onClick={async () => {
-                    setTestingChannel('telegram');
-                    setTestAlertMessage(null);
-                    const res = await dispatchWebhookTest('telegram');
-                    setTestAlertMessage(res.message);
-                    setTestingChannel(null);
-                  }}
-                  className="px-3 py-1.5 rounded-lg bg-sky-950 border border-sky-600/50 text-sky-300 hover:bg-sky-900 text-[11px] font-bold flex items-center gap-1.5 transition cursor-pointer"
-                >
-                  <Send className="h-3 w-3" />
-                  {testingChannel === 'telegram' ? 'Dispatching...' : 'Dispatch Telegram Test'}
-                </button>
+              {/* Automatic Broadcast & Filters */}
+              <div className="p-3 rounded-lg bg-slate-900/90 border border-slate-800 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-200 flex items-center gap-1.5">
+                    <Sparkles className="h-3.5 w-3.5 text-amber-400" />
+                    Automatic Price Action Broadcast Triggers
+                  </span>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={webhookSettings.telegram.autoBroadcastSignals !== false}
+                      onChange={e =>
+                        updateWebhookSettings({
+                          ...webhookSettings,
+                          telegram: { ...webhookSettings.telegram, autoBroadcastSignals: e.target.checked },
+                        })
+                      }
+                      className="rounded bg-slate-800 border-slate-700 text-sky-500 focus:ring-0"
+                    />
+                    <span className="text-[11px] text-sky-300 font-bold">Auto-Broadcast on Signal Formation</span>
+                  </label>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
+                  <label className="flex items-center gap-1.5 p-2 rounded bg-[#070a12] border border-slate-800 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={webhookSettings.telegram.broadcastBreakouts !== false}
+                      onChange={e =>
+                        updateWebhookSettings({
+                          ...webhookSettings,
+                          telegram: { ...webhookSettings.telegram, broadcastBreakouts: e.target.checked },
+                        })
+                      }
+                      className="rounded bg-slate-800 border-slate-700 text-sky-500"
+                    />
+                    <span className="text-[10px] text-slate-300">💥 Breakouts (BUY/SELL)</span>
+                  </label>
+
+                  <label className="flex items-center gap-1.5 p-2 rounded bg-[#070a12] border border-slate-800 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={webhookSettings.telegram.broadcastReversals !== false}
+                      onChange={e =>
+                        updateWebhookSettings({
+                          ...webhookSettings,
+                          telegram: { ...webhookSettings.telegram, broadcastReversals: e.target.checked },
+                        })
+                      }
+                      className="rounded bg-slate-800 border-slate-700 text-sky-500"
+                    />
+                    <span className="text-[10px] text-slate-300">🔄 S/R Reversals</span>
+                  </label>
+
+                  <label className="flex items-center gap-1.5 p-2 rounded bg-[#070a12] border border-slate-800 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={webhookSettings.telegram.broadcastTargetUpdates !== false}
+                      onChange={e =>
+                        updateWebhookSettings({
+                          ...webhookSettings,
+                          telegram: { ...webhookSettings.telegram, broadcastTargetUpdates: e.target.checked },
+                        })
+                      }
+                      className="rounded bg-slate-800 border-slate-700 text-sky-500"
+                    />
+                    <span className="text-[10px] text-slate-300">🎯 Multi-Targets (T1-T4)</span>
+                  </label>
+
+                  <label className="flex items-center gap-1.5 p-2 rounded bg-[#070a12] border border-slate-800 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={webhookSettings.telegram.includeSebiDisclaimer !== false}
+                      onChange={e =>
+                        updateWebhookSettings({
+                          ...webhookSettings,
+                          telegram: { ...webhookSettings.telegram, includeSebiDisclaimer: e.target.checked },
+                        })
+                      }
+                      className="rounded bg-slate-800 border-slate-700 text-sky-500"
+                    />
+                    <span className="text-[10px] text-slate-300">⚖️ SEBI Disclaimer</span>
+                  </label>
+                </div>
+              </div>
+
+              {/* Message Format Live Preview */}
+              <div className="p-3 rounded-lg bg-[#070a12] border border-slate-800">
+                <div className="text-[10px] text-slate-400 font-bold uppercase mb-1.5 flex items-center justify-between">
+                  <span>Telegram Message Template Preview</span>
+                  <span className="text-[9px] text-sky-400">HTML Rich Formatted</span>
+                </div>
+                <div className="p-3 rounded bg-slate-950 border border-slate-800/80 text-[11px] text-slate-300 font-mono leading-relaxed whitespace-pre-wrap">
+                  {`🟢 🚀 BUY / LONG CALL - NIFTY 50\n` +
+                   `━━━━━━━━━━━━━━━━━━━━━\n` +
+                   `📊 Pattern: RESISTANCE BREAKOUT 💥\n` +
+                   `🎯 Signal Type: S/R BREAKOUT\n` +
+                   `💎 Conviction: 88% High Probability | ⚡ Volume: 2.4x vs 20-EMA\n` +
+                   `📍 Entry Trigger: ₹24,840.00\n` +
+                   `• Strict Stop Loss (SL): ₹24,800.00 (-40 pts)\n` +
+                   `• Target 1 (1:1.5): ₹24,900.00 | Target 2 (1:2.0): ₹24,920.00\n` +
+                   `• Target 3 (1:3.0): ₹24,960.00 | Target 4 (Runner): ₹25,000.00\n` +
+                   `━━━━━━━━━━━━━━━━━━━━━\n` +
+                   `🕒 Dispatched via ${webhookSettings.telegram.channelName || 'ShareMarket Pro Price Action'}`}
+                </div>
+              </div>
+
+              {/* Test & Save Actions */}
+              <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+                <div className="text-[10px] text-slate-400">
+                  Make sure you have added your Telegram Bot as an <b>Admin</b> to your Telegram Channel.
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={testingChannel === 'telegram'}
+                    onClick={async () => {
+                      setTestingChannel('telegram');
+                      setTestAlertMessage(null);
+                      const res = await dispatchWebhookTest('telegram');
+                      setTestAlertMessage(res.message);
+                      setTestingChannel(null);
+                    }}
+                    className="px-3.5 py-2 rounded-lg bg-sky-950 border border-sky-600 text-sky-300 hover:bg-sky-900 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer disabled:opacity-50"
+                  >
+                    <Send className="h-3.5 w-3.5" />
+                    {testingChannel === 'telegram' ? 'Dispatching Test...' : 'Send Test Signal to Telegram'}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleSaveSettings}
+                    disabled={saving}
+                    className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold flex items-center gap-1.5 transition shadow cursor-pointer disabled:opacity-50"
+                  >
+                    <Save className="h-3.5 w-3.5" />
+                    {saving ? 'Saving...' : 'Save Telegram Settings'}
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -443,6 +853,7 @@ export const DeveloperSettingsModal: React.FC<DeveloperSettingsModalProps> = ({
                     checked={webhookSettings.whatsapp.enabled}
                     onChange={e =>
                       updateWebhookSettings({
+                        ...webhookSettings,
                         whatsapp: { ...webhookSettings.whatsapp, enabled: e.target.checked },
                       })
                     }
@@ -460,6 +871,7 @@ export const DeveloperSettingsModal: React.FC<DeveloperSettingsModalProps> = ({
                     value={webhookSettings.whatsapp.webhookUrl}
                     onChange={e =>
                       updateWebhookSettings({
+                        ...webhookSettings,
                         whatsapp: { ...webhookSettings.whatsapp, webhookUrl: e.target.value },
                       })
                     }
@@ -468,13 +880,14 @@ export const DeveloperSettingsModal: React.FC<DeveloperSettingsModalProps> = ({
                   />
                 </div>
                 <div>
-                  <label className="text-[10px] text-slate-400 uppercase block mb-1">Phone Number (+91...)</label>
+                  <label className="text-[10px] text-slate-400 uppercase block mb-1">Recipient Number (+91...)</label>
                   <input
                     type="text"
-                    value={webhookSettings.whatsapp.phoneNumber}
+                    value={webhookSettings.whatsapp.recipientNumber || ''}
                     onChange={e =>
                       updateWebhookSettings({
-                        whatsapp: { ...webhookSettings.whatsapp, phoneNumber: e.target.value },
+                        ...webhookSettings,
+                        whatsapp: { ...webhookSettings.whatsapp, recipientNumber: e.target.value },
                       })
                     }
                     placeholder="+919876543210"
@@ -506,6 +919,13 @@ export const DeveloperSettingsModal: React.FC<DeveloperSettingsModalProps> = ({
               <div className="p-2.5 rounded-lg bg-indigo-950/80 border border-indigo-500/50 text-indigo-200 flex items-center gap-2 animate-fadeIn">
                 <CheckCircle2 className="h-4 w-4 shrink-0 text-indigo-400" />
                 <span>{testAlertMessage}</span>
+              </div>
+            )}
+
+            {saveSuccess && (
+              <div className="p-2.5 rounded-lg bg-emerald-950/80 border border-emerald-500/50 text-emerald-200 flex items-center gap-2 animate-fadeIn">
+                <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
+                <span>Telegram connection &amp; webhook settings saved successfully!</span>
               </div>
             )}
           </div>

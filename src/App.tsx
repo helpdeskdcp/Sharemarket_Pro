@@ -15,6 +15,8 @@ import { BrokerAuthModal } from './components/BrokerAuthModal';
 import { DeveloperSettingsModal } from './components/DeveloperSettingsModal';
 import { SubscriptionModal } from './components/SubscriptionModal';
 import { SebiDocumentationModal } from './components/SebiDocumentationModal';
+import { PriceActionSignalsDashboard } from './components/PriceActionSignalsDashboard';
+import { PerformanceAnalytics } from './components/PerformanceAnalytics';
 import {
   LayoutDashboard,
   Layers,
@@ -23,13 +25,19 @@ import {
   Globe,
   ShieldAlert,
   Info,
+  Zap,
+  BarChart3,
+  LineChart,
+  ListFilter,
 } from 'lucide-react';
 
 const DashboardContent: React.FC = () => {
   const { activeSymbol, activeTicker, brokerMode, simulationEnabled } = useTrading();
 
   // Navigation tab for center stage
-  const [mainView, setMainView] = useState<'OVERVIEW' | 'FO_CHAIN' | 'AI_STRATEGY' | 'PORTFOLIO' | 'GLOBAL'>('OVERVIEW');
+  const [mainView, setMainView] = useState<
+    'PRICE_ACTION' | 'PERFORMANCE' | 'WATCHLIST' | 'CHARTS' | 'FO_CHAIN' | 'AI_STRATEGY' | 'PORTFOLIO' | 'GLOBAL' | 'OVERVIEW'
+  >('PRICE_ACTION');
 
   // Modal states
   const [orderModalOpen, setOrderModalOpen] = useState(false);
@@ -93,154 +101,219 @@ const DashboardContent: React.FC = () => {
       <SebiComplianceBanner onOpenDocModal={() => setSebiDocModalOpen(true)} />
 
       {/* Main Workspace Navigation Bar */}
-      <div className="bg-[#090d18] border-b border-slate-800/80 px-4 py-1.5">
-        <div className="max-w-[1720px] mx-auto flex items-center justify-between overflow-x-auto scrollbar-none">
-          <div className="flex items-center gap-1.5">
+      <div className="bg-[#090d18] border-b border-slate-800/80 px-4 py-1.5 sticky top-0 z-30 shadow-md">
+        <div className="max-w-[1720px] mx-auto flex items-center justify-between overflow-x-auto scrollbar-none gap-2">
+          <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-none py-0.5">
+            {/* 1. Price Action Strategy Engine */}
             <button
-              onClick={() => setMainView('OVERVIEW')}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition whitespace-nowrap ${
-                mainView === 'OVERVIEW'
-                  ? 'bg-cyan-950/80 text-cyan-300 border border-cyan-500/40'
-                  : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
+              onClick={() => setMainView('PRICE_ACTION')}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition whitespace-nowrap cursor-pointer ${
+                mainView === 'PRICE_ACTION'
+                  ? 'bg-amber-950/90 text-amber-300 border border-amber-500/50 shadow-sm shadow-amber-900/30'
+                  : 'text-amber-400/90 hover:text-amber-200 hover:bg-amber-950/40 border border-transparent'
               }`}
             >
-              <LayoutDashboard className="h-3.5 w-3.5" />
-              Terminal Overview
+              <Zap className="h-3.5 w-3.5 text-amber-400 animate-pulse" />
+              Price Action Signals (1-4/Day)
             </button>
 
+            {/* 2. Performance Analytics */}
             <button
-              onClick={() => setMainView('FO_CHAIN')}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition whitespace-nowrap ${
-                mainView === 'FO_CHAIN'
-                  ? 'bg-cyan-950/80 text-cyan-300 border border-cyan-500/40'
-                  : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
+              onClick={() => setMainView('PERFORMANCE')}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition whitespace-nowrap cursor-pointer ${
+                mainView === 'PERFORMANCE'
+                  ? 'bg-indigo-950/90 text-indigo-300 border border-indigo-500/50 shadow-sm shadow-indigo-900/30'
+                  : 'text-indigo-400/90 hover:text-indigo-200 hover:bg-indigo-950/40 border border-transparent'
               }`}
             >
-              <Layers className="h-3.5 w-3.5" />
+              <BarChart3 className="h-3.5 w-3.5 text-indigo-400" />
+              Performance Analytics
+            </button>
+
+            {/* 3. Dedicated Separate Watchlist Page */}
+            <button
+              onClick={() => setMainView('WATCHLIST')}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition whitespace-nowrap cursor-pointer ${
+                mainView === 'WATCHLIST'
+                  ? 'bg-cyan-950/90 text-cyan-300 border border-cyan-500/50 shadow-sm shadow-cyan-900/30'
+                  : 'text-cyan-400/90 hover:text-cyan-200 hover:bg-cyan-950/40 border border-transparent'
+              }`}
+            >
+              <ListFilter className="h-3.5 w-3.5 text-cyan-400" />
+              Watchlist Page
+            </button>
+
+            {/* 4. Technical Chart */}
+            <button
+              onClick={() => setMainView('CHARTS')}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition whitespace-nowrap cursor-pointer ${
+                mainView === 'CHARTS'
+                  ? 'bg-teal-950/90 text-teal-300 border border-teal-500/50 shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 border border-transparent'
+              }`}
+            >
+              <LineChart className="h-3.5 w-3.5 text-teal-400" />
+              Technical Chart
+            </button>
+
+            {/* 5. F&O Options Matrix */}
+            <button
+              onClick={() => setMainView('FO_CHAIN')}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition whitespace-nowrap cursor-pointer ${
+                mainView === 'FO_CHAIN'
+                  ? 'bg-cyan-950/90 text-cyan-300 border border-cyan-500/50 shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 border border-transparent'
+              }`}
+            >
+              <Layers className="h-3.5 w-3.5 text-cyan-400" />
               F&amp;O Options Matrix
             </button>
 
+            {/* 6. AI Strategy Engine */}
             <button
               onClick={() => setMainView('AI_STRATEGY')}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition whitespace-nowrap ${
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition whitespace-nowrap cursor-pointer ${
                 mainView === 'AI_STRATEGY'
-                  ? 'bg-indigo-950/80 text-indigo-300 border border-indigo-500/40'
-                  : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
+                  ? 'bg-indigo-950/90 text-indigo-300 border border-indigo-500/50 shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 border border-transparent'
               }`}
             >
               <BrainCircuit className="h-3.5 w-3.5 text-indigo-400" />
-              AI Strategy Engine (% Prob)
+              AI Strategy Engine
             </button>
 
+            {/* 7. Portfolio & Orders */}
             <button
               onClick={() => setMainView('PORTFOLIO')}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition whitespace-nowrap ${
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition whitespace-nowrap cursor-pointer ${
                 mainView === 'PORTFOLIO'
-                  ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-500/40'
-                  : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
+                  ? 'bg-emerald-950/90 text-emerald-300 border border-emerald-500/50 shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 border border-transparent'
               }`}
             >
               <Briefcase className="h-3.5 w-3.5 text-emerald-400" />
               Portfolio &amp; Orders
             </button>
 
+            {/* 8. Angel One Global Macro */}
             <button
               onClick={() => setMainView('GLOBAL')}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition whitespace-nowrap ${
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition whitespace-nowrap cursor-pointer ${
                 mainView === 'GLOBAL'
-                  ? 'bg-cyan-950/80 text-cyan-300 border border-cyan-500/40'
-                  : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
+                  ? 'bg-cyan-950/90 text-cyan-300 border border-cyan-500/50 shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 border border-transparent'
               }`}
             >
               <Globe className="h-3.5 w-3.5" />
-              Angel One Global Macro
+              Global Macro
+            </button>
+
+            {/* 9. Terminal Overview */}
+            <button
+              onClick={() => setMainView('OVERVIEW')}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition whitespace-nowrap cursor-pointer ${
+                mainView === 'OVERVIEW'
+                  ? 'bg-slate-800 text-cyan-300 border border-slate-700 shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 border border-transparent'
+              }`}
+            >
+              <LayoutDashboard className="h-3.5 w-3.5" />
+              Overview
             </button>
           </div>
 
-          <div className="hidden lg:flex items-center gap-2 text-[11px] font-mono text-slate-400">
-            <span>Active: <strong className="text-white">{activeSymbol}</strong></span>
+          <div className="hidden xl:flex items-center gap-2.5 text-[11px] font-mono text-slate-400 shrink-0">
+            <span>Symbol: <strong className="text-white">{activeSymbol}</strong></span>
             <span>•</span>
-            <span>Mode: <strong className={brokerMode === 'PAPER' ? 'text-emerald-400' : 'text-rose-400 font-bold'}>{brokerMode === 'PAPER' ? 'Paper Trading (Virtual)' : 'Live Angel One'}</strong></span>
+            <span>Mode: <strong className={brokerMode === 'PAPER' ? 'text-emerald-400' : 'text-rose-400 font-bold'}>{brokerMode === 'PAPER' ? 'Paper (Virtual)' : 'Angel One Live'}</strong></span>
             <span>•</span>
-            <span className="text-cyan-400">Feed: Authentic Quotes</span>
+            <span className="text-cyan-400 flex items-center gap-1">
+              <span className="h-1.5 w-1.5 rounded-full bg-cyan-400 animate-ping inline-block" />
+              Real Exchange Feed
+            </span>
           </div>
         </div>
       </div>
 
-      {/* Main Grid Content */}
+      {/* Main Full-Width Workspace Container */}
       <main className="max-w-[1720px] w-full mx-auto p-3 sm:p-4 flex-1">
-        <div className="grid grid-cols-1 xl:grid-cols-12 gap-4 items-start">
-          {/* Left Column: Watchlist (Always accessible) */}
-          <div className="xl:col-span-3 h-[600px] xl:h-[calc(100vh-170px)] sticky top-[108px]">
-            <Watchlist onQuickOrder={handleQuickOrder} />
-          </div>
+        <div className="w-full space-y-4">
+          {/* View 1: Price Action Strategy & Signals Engine (Main / Hero View) */}
+          {mainView === 'PRICE_ACTION' && (
+            <div className="space-y-4">
+              <PriceActionSignalsDashboard />
+              <TradingChart
+                onQuickOrder={handleQuickOrder}
+                onOpenAlertModal={handleOpenAlert}
+              />
+            </div>
+          )}
 
-          {/* Right Column: Dynamic Workspace Content */}
-          <div className="xl:col-span-9 space-y-4">
-            {/* View 1: Terminal Overview (Comprehensive Full Dashboard) */}
-            {mainView === 'OVERVIEW' && (
-              <>
-                {/* Radial D3 Market Sentiment Gauge based on AI Strategy Engine */}
-                <MarketSentimentGauge onExploreStrategy={() => setMainView('AI_STRATEGY')} />
+          {/* View 2: Performance Analytics Dashboard (Pristine, Zero Duplicates) */}
+          {mainView === 'PERFORMANCE' && (
+            <div className="space-y-4">
+              <PerformanceAnalytics />
+            </div>
+          )}
 
-                {/* Real-time Technical Trend Chart */}
-                <TradingChart
-                  onQuickOrder={handleQuickOrder}
-                  onOpenAlertModal={handleOpenAlert}
-                />
+          {/* View 3: Dedicated Watchlist Full Page */}
+          {mainView === 'WATCHLIST' && (
+            <Watchlist
+              fullPageMode={true}
+              onQuickOrder={handleQuickOrder}
+            />
+          )}
 
-                {/* F&O Options Trading Chain */}
-                <OptionChain onSelectOptionTrade={handleSelectOptionTrade} />
+          {/* View 4: Dedicated Technical Chart */}
+          {mainView === 'CHARTS' && (
+            <div className="space-y-4">
+              <TradingChart
+                onQuickOrder={handleQuickOrder}
+                onOpenAlertModal={handleOpenAlert}
+              />
+            </div>
+          )}
 
-                {/* World-Class AI Strategy Engine */}
-                <AiStrategyEngine />
+          {/* View 5: F&O Options Matrix */}
+          {mainView === 'FO_CHAIN' && (
+            <div className="space-y-4">
+              <OptionChain onSelectOptionTrade={handleSelectOptionTrade} />
+            </div>
+          )}
 
-                {/* Global Markets & Macro Analysis */}
-                <GlobalMarketMacro />
+          {/* View 6: AI Strategy Lab */}
+          {mainView === 'AI_STRATEGY' && (
+            <div className="space-y-4">
+              <MarketSentimentGauge onExploreStrategy={() => setMainView('AI_STRATEGY')} />
+              <AiStrategyEngine />
+            </div>
+          )}
 
-                {/* Portfolio & Order Book */}
-                <PortfolioView />
-              </>
-            )}
+          {/* View 7: Portfolio & Orders */}
+          {mainView === 'PORTFOLIO' && (
+            <div className="space-y-4">
+              <PortfolioView />
+            </div>
+          )}
 
-            {/* View 2: F&O Options Matrix */}
-            {mainView === 'FO_CHAIN' && (
-              <div className="space-y-4">
-                <OptionChain onSelectOptionTrade={handleSelectOptionTrade} />
-                <AiStrategyEngine />
-              </div>
-            )}
+          {/* View 8: Global Markets */}
+          {mainView === 'GLOBAL' && (
+            <div className="space-y-4">
+              <GlobalMarketMacro />
+            </div>
+          )}
 
-            {/* View 3: AI Strategy Lab */}
-            {mainView === 'AI_STRATEGY' && (
-              <div className="space-y-4">
-                <MarketSentimentGauge />
-                <AiStrategyEngine />
-                <TradingChart
-                  onQuickOrder={handleQuickOrder}
-                  onOpenAlertModal={handleOpenAlert}
-                />
-              </div>
-            )}
-
-            {/* View 4: Portfolio & Positions */}
-            {mainView === 'PORTFOLIO' && (
-              <div className="space-y-4">
-                <PortfolioView />
-              </div>
-            )}
-
-            {/* View 5: Global Markets */}
-            {mainView === 'GLOBAL' && (
-              <div className="space-y-4">
-                <GlobalMarketMacro />
-                <TradingChart
-                  onQuickOrder={handleQuickOrder}
-                  onOpenAlertModal={handleOpenAlert}
-                />
-              </div>
-            )}
-          </div>
+          {/* View 9: Terminal Overview */}
+          {mainView === 'OVERVIEW' && (
+            <div className="space-y-4">
+              <MarketSentimentGauge onExploreStrategy={() => setMainView('AI_STRATEGY')} />
+              <PriceActionSignalsDashboard />
+              <TradingChart
+                onQuickOrder={handleQuickOrder}
+                onOpenAlertModal={handleOpenAlert}
+              />
+            </div>
+          )}
         </div>
       </main>
 

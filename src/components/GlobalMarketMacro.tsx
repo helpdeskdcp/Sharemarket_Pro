@@ -1,23 +1,16 @@
 import React from 'react';
 import {
   Globe,
+  Compass,
   TrendingUp,
   TrendingDown,
-  ArrowUpRight,
-  ArrowDownRight,
-  Activity,
-  Compass,
-  DollarSign,
-  Droplet,
-  Sun,
   ShieldCheck,
+  Activity,
 } from 'lucide-react';
 import { useTrading } from '../context/TradingContext';
 
 export const GlobalMarketMacro: React.FC = () => {
-  const { tickers, setActiveSymbol } = useTrading();
-
-  const globalTickers = tickers.filter(t => t.instrumentType === 'GLOBAL');
+  const { tickers } = useTrading();
 
   // Calculate composite macro sentiment score
   const giftNifty = tickers.find(t => t.symbol === 'GIFT NIFTY');
@@ -124,42 +117,31 @@ export const GlobalMarketMacro: React.FC = () => {
           </div>
         </div>
 
-        {/* Global Asset Grid */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2.5">
-          {globalTickers.map(ticker => {
-            const isPositive = ticker.change >= 0;
-            return (
-              <div
-                key={ticker.symbol}
-                onClick={() => setActiveSymbol(ticker.symbol)}
-                className="p-3 rounded-lg bg-[#090d16] border border-slate-800/80 hover:border-cyan-500/40 cursor-pointer transition group"
-              >
-                <div className="flex items-center justify-between text-xs font-mono mb-1">
-                  <span className="font-bold text-white group-hover:text-cyan-300 transition">
-                    {ticker.symbol}
-                  </span>
-                  <span className="text-[10px] px-1 py-0.2 rounded bg-slate-800 text-slate-400 border border-slate-700">
-                    {ticker.currency}
-                  </span>
-                </div>
-                <div className="font-mono font-extrabold text-sm text-white">
-                  {ticker.currency === 'USD' ? '$' : '₹'}
-                  {ticker.ltp.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                </div>
-                <div
-                  className={`text-[11px] font-mono font-semibold flex items-center gap-0.5 mt-0.5 ${
-                    isPositive ? 'text-emerald-400' : 'text-rose-400'
-                  }`}
-                >
-                  {isPositive ? <ArrowUpRight className="h-3 w-3" /> : <ArrowDownRight className="h-3 w-3" />}
-                  <span>
-                    {isPositive ? '+' : ''}
-                    {ticker.changePercent.toFixed(2)}%
-                  </span>
-                </div>
-              </div>
-            );
-          })}
+        {/* Macro Insight Drivers Breakdown */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs font-mono">
+          <div className="p-3 rounded-lg bg-[#090d16] border border-slate-800">
+            <div className="text-slate-400 text-[10px] uppercase font-bold mb-1">GIFT Nifty Overnight Bias</div>
+            <div className={`text-sm font-extrabold flex items-center gap-1 ${giftChange >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+              {giftChange >= 0 ? '+' : ''}{giftChange.toFixed(2)}%
+            </div>
+            <div className="text-[10px] text-slate-500 mt-0.5">Early indicator for Indian market open</div>
+          </div>
+
+          <div className="p-3 rounded-lg bg-[#090d16] border border-slate-800">
+            <div className="text-slate-400 text-[10px] uppercase font-bold mb-1">US Benchmark Blend (S&amp;P/NQ)</div>
+            <div className={`text-sm font-extrabold flex items-center gap-1 ${usChange >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+              {usChange >= 0 ? '+' : ''}{usChange.toFixed(2)}%
+            </div>
+            <div className="text-[10px] text-slate-500 mt-0.5">Global risk appetite correlation</div>
+          </div>
+
+          <div className="p-3 rounded-lg bg-[#090d16] border border-slate-800">
+            <div className="text-slate-400 text-[10px] uppercase font-bold mb-1">Brent Crude Impact</div>
+            <div className={`text-sm font-extrabold flex items-center gap-1 ${crudeChange < 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+              {crudeChange >= 0 ? '+' : ''}{crudeChange.toFixed(2)}%
+            </div>
+            <div className="text-[10px] text-slate-500 mt-0.5">{crudeChange < 0 ? 'Favorable for Indian Rupee/Economy' : 'Inflationary pressure signal'}</div>
+          </div>
         </div>
       </div>
     </div>

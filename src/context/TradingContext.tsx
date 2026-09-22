@@ -18,7 +18,7 @@ import {
 } from '../types/market';
 import { INITIAL_TICKERS, INITIAL_AUDIT_LOGS, WORLD_CLASS_STRATEGIES, INITIAL_GTT_ORDERS, DEFAULT_WEBHOOK_SETTINGS } from '../data/mockMarketData';
 import { playAlertPing } from '../utils/audioAlert';
-import { logAuditEvent, fetchDeveloperSettings, fetchMarketTickers, fetchGttOrders, createGttOrder as apiCreateGtt, cancelGttOrder as apiCancelGtt, testWebhookAlert } from '../services/api';
+import { logAuditEvent, fetchDeveloperSettings, fetchMarketTickers, fetchGttOrders, createGttOrder as apiCreateGtt, cancelGttOrder as apiCancelGtt, testWebhookAlert, broadcastPriceActionToTelegram } from '../services/api';
 
 export type WatchlistTab = 'INDICES' | 'NIFTY50' | 'FO' | 'GLOBAL' | 'CUSTOM';
 
@@ -95,6 +95,7 @@ interface TradingContextType {
   webhookSettings: AlertWebhookSettings;
   updateWebhookSettings: (settings: AlertWebhookSettings) => void;
   dispatchWebhookTest: (channel: 'telegram' | 'whatsapp') => Promise<{ success: boolean; message: string }>;
+  broadcastTelegramSignal: (signal: any, customChannel?: string) => Promise<{ success: boolean; mode: string; message: string }>;
 
   // Broker & Developer
   brokerConnected: boolean;
@@ -970,6 +971,32 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return res;
   }, [webhookSettings, soundEnabled]);
 
+  const broadcastTelegramSignal = useCallback(async (signal: any, customChannel?: string) => {
+    const res = await broadcastPriceActionToTelegram(
+      signal,
+      customChannel || webhookSettings.telegram.chatId,
+      webhookSettings.telegram.botToken
+    );
+
+    if (soundEnabled) {
+      playAlertPing('alert');
+    }
+
+    setNotifications(prev => [
+      {
+        id: `notif-${Date.now()}`,
+        title: `Telegram Broadcast: ${signal.indexSymbol || 'NIFTY 50'} ${signal.action || 'SIGNAL'}`,
+        message: res.message,
+        timestamp: 'Just now',
+        type: 'ALERT',
+        read: false,
+      },
+      ...prev,
+    ]);
+
+    return res;
+  }, [webhookSettings, soundEnabled]);
+
   return (
     <TradingContext.Provider
       value={{
@@ -1014,6 +1041,7 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
         webhookSettings,
         updateWebhookSettings,
         dispatchWebhookTest,
+        broadcastTelegramSignal,
 
         brokerConnected,
         brokerName,

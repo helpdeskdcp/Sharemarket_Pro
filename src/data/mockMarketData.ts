@@ -1115,8 +1115,15 @@ export const DEFAULT_WEBHOOK_SETTINGS = {
   telegram: {
     enabled: true,
     botToken: '6891238491:AAH8kqZ_DemoTelegramBotToken_TradingPro',
-    chatId: '@sharemarket_pro_alerts',
+    chatId: '@sharemarket_price_action_signals',
+    channelName: 'NIFTY & BANKNIFTY Price Action VIP Broadcast',
     isConnected: true,
+    autoBroadcastSignals: true,
+    broadcastBreakouts: true,
+    broadcastReversals: true,
+    broadcastTargetUpdates: true,
+    includeSebiDisclaimer: true,
+    customFooter: '⚡ Dispatched by ShareMarket Pro Price Action Engine',
   },
   whatsapp: {
     enabled: false,
@@ -1124,5 +1131,18 @@ export const DEFAULT_WEBHOOK_SETTINGS = {
     recipientNumber: '+919876543210',
     isConnected: false,
   }
+};
+
+export const DEFAULT_ENGINE_SETTINGS = {
+  priceActionEngine: true,
+  geminiRegimeClassifier: true,
+  adaptiveTargetEngine: true,
+  angelOneWsFeed: true,
+  optionsGreeksEngine: true,
+  d3SentimentPhysics: true,
+  sebiGuardrails: true,
+  audioAlertEngine: true,
+  volatilityTrapScanner: true,
+  autoTrailingGtt: true,
 };
 

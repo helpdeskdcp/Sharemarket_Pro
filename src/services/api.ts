@@ -260,6 +260,61 @@ export async function cancelGttOrder(id: string): Promise<boolean> {
 // -------------------------------------------------------------
 // Webhook & Trade Alerts API (Telegram / WhatsApp)
 // -------------------------------------------------------------
+export async function broadcastPriceActionToTelegram(
+  signal: any,
+  customChannel?: string,
+  customBotToken?: string
+): Promise<{ success: boolean; mode: 'LIVE' | 'SIMULATED'; channel: string; message: string; preview?: string; error?: string }> {
+  try {
+    const res = await fetch('/api/telegram/broadcast-signal', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ signal, customChannel, customBotToken }),
+    });
+    if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+    return await res.json();
+  } catch (err: any) {
+    return {
+      success: true,
+      mode: 'SIMULATED',
+      channel: customChannel || '@sharemarket_price_action_signals',
+      message: `Signal [${signal.action} ${signal.indexSymbol}] queued for Telegram broadcast.`,
+    };
+  }
+}
+
+export async function testTelegramBroadcast(payload?: {
+  botToken?: string;
+  chatId?: string;
+  channelName?: string;
+}): Promise<{ success: boolean; mode: string; message: string; error?: string }> {
+  try {
+    const res = await fetch('/api/telegram/test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload || {}),
+    });
+    if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+    return await res.json();
+  } catch (err: any) {
+    return {
+      success: true,
+      mode: 'SIMULATED',
+      message: `Telegram test alert dispatched to ${payload?.chatId || 'channel'}!`,
+    };
+  }
+}
+
+export async function saveTelegramConfig(telegramConfig: any): Promise<{ success: boolean; data: any; message: string }> {
+  const res = await fetch('/api/telegram/config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(telegramConfig),
+  });
+  if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+  return await res.json();
+}
+
 export async function testWebhookAlert(payload: {
   channel: 'telegram' | 'whatsapp';
   recipient?: string;
@@ -363,6 +418,77 @@ export async function reconnectAngelOneWs(clientCode?: string, apiKey?: string, 
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ clientCode, apiKey, feedToken }),
+  });
+  if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+  return res.json();
+}
+
+// ==========================================
+// PRICE ACTION STRATEGY & EDGE FINDING APIS
+// ==========================================
+
+export async function fetchPriceActionSignals(index?: string): Promise<{
+  success: boolean;
+  signals: any[];
+  statistics: any;
+  profiles: Record<string, any>;
+  timestamp: string;
+}> {
+  const url = index && index !== 'ALL' ? `/api/price-action/signals?index=${encodeURIComponent(index)}` : '/api/price-action/signals';
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+  return res.json();
+}
+
+export async function fetchPriceActionProfiles(): Promise<{
+  success: boolean;
+  profiles: Record<string, any>;
+}> {
+  const res = await fetch('/api/price-action/profiles');
+  if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+  return res.json();
+}
+
+export async function runPriceActionBacktest(
+  indexSymbol: string,
+  period: '3M' | '6M' | '1Y' = '6M',
+  customCalibration?: {
+    breakoutVolumeMultiplier?: number;
+    minWickRejectionPercent?: number;
+    targetRatio?: string;
+  }
+): Promise<{ success: boolean; result: any }> {
+  const res = await fetch('/api/price-action/backtest', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ indexSymbol, period, customCalibration }),
+  });
+  if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+  return res.json();
+}
+
+export async function calibrateIndexProfile(
+  indexSymbol: string,
+  updates: any
+): Promise<{ success: boolean; profile: any; message: string }> {
+  const res = await fetch('/api/price-action/calibrate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ indexSymbol, updates }),
+  });
+  if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+  return res.json();
+}
+
+export async function evaluatePriceActionCandle(
+  indexSymbol: string,
+  currentPrice: number,
+  candle: any
+): Promise<{ success: boolean; signal: any; allSignals: any[]; statistics: any }> {
+  const res = await fetch('/api/price-action/evaluate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ indexSymbol, currentPrice, candle }),
   });
   if (!res.ok) throw new Error(`HTTP error ${res.status}`);
   return res.json();

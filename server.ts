@@ -6,14 +6,17 @@ import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
 import * as OTPAuth from 'otpauth';
-import { INITIAL_TICKERS, generateOptionChain, generateCandleHistory, WORLD_CLASS_STRATEGIES, INITIAL_AUDIT_LOGS, INITIAL_GTT_ORDERS, DEFAULT_WEBHOOK_SETTINGS } from './src/data/mockMarketData';
+import { INITIAL_TICKERS, generateOptionChain, generateCandleHistory, WORLD_CLASS_STRATEGIES, INITIAL_AUDIT_LOGS, INITIAL_GTT_ORDERS, DEFAULT_WEBHOOK_SETTINGS, DEFAULT_ENGINE_SETTINGS } from './src/data/mockMarketData';
 import { AuditLog, DeveloperSettings, GttOrder, BacktestResult, AlertWebhookSettings, Ticker } from './src/types/market';
 import { AngelOneLiveStreamer, EXCHANGE_SYMBOL_MAP } from './src/services/angelOneLiveService';
+import { PriceActionStrategyEngine } from './src/services/priceActionEngine';
 
 dotenv.config();
 
 const app = express();
 const PORT = 3000;
+
+const priceActionEngine = PriceActionStrategyEngine.getInstance();
 
 app.use(express.json());
 
@@ -41,6 +44,7 @@ let devSettings: DeveloperSettings = {
   },
   executionMode: 'PAPER',
   webhooks: DEFAULT_WEBHOOK_SETTINGS,
+  engines: DEFAULT_ENGINE_SETTINGS,
 };
 
 let auditLogs: AuditLog[] = [...INITIAL_AUDIT_LOGS];
@@ -518,31 +522,17 @@ app.get('/api/developer/config', (req: Request, res: Response) => {
   res.json({
     success: true,
     data: {
-      angelOne: {
-        apiKey: devSettings.angelOne.apiKey,
-        clientCode: devSettings.angelOne.clientCode,
-        mpin: devSettings.angelOne.mpin,
-        totpSecret: devSettings.angelOne.totpSecret,
-        autoTotp: devSettings.angelOne.autoTotp,
-        secretKey: devSettings.angelOne.secretKey,
-        feedToken: devSettings.angelOne.feedToken,
-        isLive: devSettings.angelOne.isLive,
-        connected: devSettings.angelOne.connected,
-        lastConnected: devSettings.angelOne.lastConnected,
-      },
-      razorpay: {
-        keyId: devSettings.razorpay.keyId,
-        keySecret: devSettings.razorpay.keySecret,
-        webhookSecret: devSettings.razorpay.webhookSecret,
-        isLive: devSettings.razorpay.isLive,
-      },
+      angelOne: devSettings.angelOne,
+      razorpay: devSettings.razorpay,
       executionMode: devSettings.executionMode,
+      webhooks: devSettings.webhooks,
+      engines: devSettings.engines,
     }
   });
 });
 
 app.post('/api/developer/config', (req: Request, res: Response) => {
-  const { angelOne, razorpay, executionMode } = req.body;
+  const { angelOne, razorpay, executionMode, webhooks, engines } = req.body;
 
   if (angelOne) {
     devSettings.angelOne = {
@@ -559,6 +549,26 @@ app.post('/api/developer/config', (req: Request, res: Response) => {
   if (executionMode) {
     devSettings.executionMode = executionMode;
   }
+  if (webhooks) {
+    devSettings.webhooks = {
+      ...devSettings.webhooks,
+      ...webhooks,
+      telegram: {
+        ...(devSettings.webhooks?.telegram || DEFAULT_WEBHOOK_SETTINGS.telegram),
+        ...(webhooks.telegram || {}),
+      },
+      whatsapp: {
+        ...(devSettings.webhooks?.whatsapp || DEFAULT_WEBHOOK_SETTINGS.whatsapp),
+        ...(webhooks.whatsapp || {}),
+      },
+    };
+  }
+  if (engines) {
+    devSettings.engines = {
+      ...devSettings.engines,
+      ...engines,
+    };
+  }
 
   const newLog: AuditLog = {
     id: `log-${Date.now()}`,
@@ -567,14 +577,14 @@ app.post('/api/developer/config', (req: Request, res: Response) => {
     action: 'DEVELOPER_CONFIG_UPDATED',
     category: 'DEVELOPER',
     status: 'SUCCESS',
-    details: `API parameters updated. AngelOne Client: ${devSettings.angelOne.clientCode}, Razorpay Key: ${devSettings.razorpay.keyId.substring(0, 8)}..., ExecutionMode: ${devSettings.executionMode}`,
+    details: `API parameters updated. AngelOne Client: ${devSettings.angelOne.clientCode}, Razorpay Key: ${devSettings.razorpay.keyId.substring(0, 8)}..., ExecutionMode: ${devSettings.executionMode}, Telegram Channel: ${devSettings.webhooks?.telegram?.chatId}`,
     ipAddress: req.ip || '127.0.0.1',
   };
   auditLogs.unshift(newLog);
 
   res.json({
     success: true,
-    message: 'Developer API parameters and payment settings successfully persisted.',
+    message: 'Developer API parameters, Telegram broadcasting, and engine settings successfully persisted.',
     data: devSettings,
   });
 });
@@ -741,8 +751,226 @@ app.delete('/api/orders/gtt/:id', (req: Request, res: Response) => {
 });
 
 // -------------------------------------------------------------
+// Telegram Broadcast Engine & Real API Dispatcher
+// -------------------------------------------------------------
+async function sendTelegramBroadcast(
+  messageText: string,
+  customBotToken?: string,
+  customChatId?: string
+): Promise<{ success: boolean; mode: 'LIVE' | 'SIMULATED'; messageId?: number | string; error?: string }> {
+  const token = customBotToken || devSettings.webhooks?.telegram?.botToken || process.env.TELEGRAM_BOT_TOKEN;
+  const chat = customChatId || devSettings.webhooks?.telegram?.chatId || process.env.TELEGRAM_CHAT_ID;
+
+  if (!token || !chat) {
+    return { success: false, mode: 'SIMULATED', error: 'Telegram Bot Token or Channel Chat ID is missing.' };
+  }
+
+  // Check if token matches standard Telegram bot token pattern
+  const isLiveToken = /^\d{8,12}:[A-Za-z0-9_-]{30,50}$/.test(token.trim());
+
+  if (isLiveToken) {
+    try {
+      const url = `https://api.telegram.org/bot${token.trim()}/sendMessage`;
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: chat.trim(),
+          text: messageText,
+          parse_mode: 'HTML',
+          disable_web_page_preview: true,
+        }),
+      });
+
+      const data = (await response.json()) as any;
+      if (data.ok) {
+        return { success: true, mode: 'LIVE', messageId: data.result?.message_id };
+      } else {
+        console.warn('Telegram API rejected message:', data.description);
+        return { success: false, mode: 'LIVE', error: data.description || 'Telegram API returned error' };
+      }
+    } catch (networkErr: any) {
+      console.warn('Telegram network request error:', networkErr.message);
+      return { success: false, mode: 'LIVE', error: networkErr.message };
+    }
+  }
+
+  // Simulated / Test Telegram Broadcast Mode
+  return {
+    success: true,
+    mode: 'SIMULATED',
+    messageId: `sim_tg_${Date.now()}`,
+  };
+}
+
+function formatPriceActionSignalTelegramHtml(signal: any, channelName?: string): string {
+  const isBuy = signal.action === 'BUY';
+  const signalEmoji = isBuy ? '🟢 🚀' : '🔴 🔻';
+  const actionLabel = isBuy ? 'BUY / LONG CALL' : 'SELL / SHORT PUT';
+
+  let patternTitle = 'PRICE ACTION BREAKOUT';
+  if (signal.pattern === 'RESISTANCE_BREAKOUT') patternTitle = 'RESISTANCE BREAKOUT 💥';
+  else if (signal.pattern === 'SUPPORT_BREAKDOWN') patternTitle = 'SUPPORT BREAKDOWN ⚡';
+  else if (signal.pattern === 'DOUBLE_BOTTOM_REVERSAL') patternTitle = 'DOUBLE BOTTOM REVERSAL 🔄';
+  else if (signal.pattern === 'FAKEOUT_TRAP_REVERSAL') patternTitle = 'FAKEOUT TRAP REVERSAL 🪤';
+  else if (signal.pattern === 'TRENDLINE_BREAKOUT') patternTitle = 'TRENDLINE BREAKOUT 📈';
+
+  const cmp = Number(signal.entryPrice || signal.currentPrice || 0).toFixed(2);
+  const sl = Number(signal.stopLoss || 0).toFixed(2);
+  const t1 = signal.targets?.t1 ? Number(signal.targets.t1).toFixed(2) : '-';
+  const t2 = signal.targets?.t2 ? Number(signal.targets.t2).toFixed(2) : '-';
+  const t3 = signal.targets?.t3 ? Number(signal.targets.t3).toFixed(2) : '-';
+  const t4 = signal.targets?.t4 ? Number(signal.targets.t4).toFixed(2) : '-';
+
+  return `
+<b>${signalEmoji} ${actionLabel} - ${signal.indexSymbol || 'NIFTY 50'}</b>
+━━━━━━━━━━━━━━━━━━━━━
+📊 <b>Pattern:</b> ${patternTitle}
+🎯 <b>Signal Type:</b> ${signal.type || 'S/R BREAKOUT'}
+💎 <b>Conviction:</b> ${signal.probabilityPercent || 88}% High Probability
+⚡ <b>Volume Surge:</b> ${signal.volumeMultiplier || 2.4}x vs 20-EMA
+
+<b>📍 TRADE LEVELS (Strict Execution):</b>
+• <b>Entry Trigger:</b> ₹${cmp}
+• <b>Strict Stop Loss (SL):</b> ₹${sl}
+• <b>Target 1 (1:1.5):</b> ₹${t1}
+• <b>Target 2 (1:2.0):</b> ₹${t2}
+• <b>Target 3 (1:3.0):</b> ₹${t3}
+• <b>Target 4 (Runner 1:4.0):</b> ₹${t4}
+• <b>Risk-to-Reward:</b> ${signal.riskRewardRatio || '1:2.5'}
+
+💡 <b>Strategy Rationale:</b>
+${signal.rationale || 'High-volume breakout confirmed across structural key resistance level with clean multi-bar momentum.'}
+
+━━━━━━━━━━━━━━━━━━━━━
+🕒 <i>Time: ${new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })} IST | ${channelName || devSettings.webhooks?.telegram?.channelName || 'ShareMarket Pro Price Action'}</i>
+⚠️ <i>SEBI Statutory Notice: Dispatched for algorithmic simulation & research. Options/Futures carry high capital risk.</i>
+`.trim();
+}
+
+// -------------------------------------------------------------
 // Webhook & Trade Alerts Dispatch (Telegram / WhatsApp)
 // -------------------------------------------------------------
+app.get('/api/telegram/config', (req: Request, res: Response) => {
+  res.json({
+    success: true,
+    data: devSettings.webhooks?.telegram || DEFAULT_WEBHOOK_SETTINGS.telegram,
+  });
+});
+
+app.post('/api/telegram/config', (req: Request, res: Response) => {
+  const telegramConfig = req.body;
+  if (devSettings.webhooks) {
+    devSettings.webhooks.telegram = {
+      ...devSettings.webhooks.telegram,
+      ...telegramConfig,
+    };
+  }
+
+  auditLogs.unshift({
+    id: `log-${Date.now()}`,
+    timestamp: new Date().toISOString(),
+    user: 'developer_admin',
+    action: 'TELEGRAM_CONFIG_UPDATED',
+    category: 'ALERT',
+    status: 'SUCCESS',
+    details: `Telegram broadcast settings updated. Channel: ${devSettings.webhooks?.telegram?.chatId}, AutoBroadcast: ${devSettings.webhooks?.telegram?.autoBroadcastSignals}`,
+    ipAddress: req.ip || '127.0.0.1',
+  });
+
+  res.json({
+    success: true,
+    message: 'Telegram broadcast configuration saved successfully!',
+    data: devSettings.webhooks?.telegram,
+  });
+});
+
+app.post('/api/telegram/broadcast-signal', async (req: Request, res: Response) => {
+  const { signal, customChannel, customBotToken } = req.body;
+  if (!signal) {
+    return res.status(400).json({ success: false, error: 'Price Action signal data required' });
+  }
+
+  const tgConfig = devSettings.webhooks?.telegram || DEFAULT_WEBHOOK_SETTINGS.telegram;
+  const channelName = tgConfig.channelName || 'ShareMarket Pro VIP Price Action';
+  const formattedHtml = formatPriceActionSignalTelegramHtml(signal, channelName);
+
+  const dispatchResult = await sendTelegramBroadcast(
+    formattedHtml,
+    customBotToken || tgConfig.botToken,
+    customChannel || tgConfig.chatId
+  );
+
+  const targetChat = customChannel || tgConfig.chatId || '@sharemarket_price_action_signals';
+
+  auditLogs.unshift({
+    id: `log-${Date.now()}`,
+    timestamp: new Date().toISOString(),
+    user: 'price_action_engine',
+    action: 'PRICE_ACTION_TELEGRAM_BROADCAST',
+    category: 'ALERT',
+    status: dispatchResult.success ? 'SUCCESS' : 'WARNING',
+    details: `Price Action Signal [${signal.action} ${signal.indexSymbol} @ ₹${signal.entryPrice}] broadcasted to Telegram channel ${targetChat} (${dispatchResult.mode} mode)${dispatchResult.error ? ` - Notice: ${dispatchResult.error}` : ''}`,
+    ipAddress: req.ip || '127.0.0.1',
+  });
+
+  res.json({
+    success: dispatchResult.success,
+    mode: dispatchResult.mode,
+    channel: targetChat,
+    messageId: dispatchResult.messageId,
+    preview: formattedHtml,
+    message: dispatchResult.success
+      ? `Signal broadcasted successfully to Telegram channel ${targetChat} (${dispatchResult.mode} mode)`
+      : `Failed to broadcast to Telegram: ${dispatchResult.error}`,
+    error: dispatchResult.error,
+  });
+});
+
+app.post('/api/telegram/test', async (req: Request, res: Response) => {
+  const { botToken, chatId, channelName } = req.body || {};
+  const token = botToken || devSettings.webhooks?.telegram?.botToken;
+  const chat = chatId || devSettings.webhooks?.telegram?.chatId;
+  const name = channelName || devSettings.webhooks?.telegram?.channelName || 'ShareMarket Pro';
+
+  const testMessage = `
+<b>🚀 ShareMarket Pro - Telegram Signal Broadcast Connected!</b>
+━━━━━━━━━━━━━━━━━━━━━
+✅ <b>Status:</b> Channel Broadcast Operational
+📡 <b>Engine:</b> Price Action S/R Breakout & Reversal Engine
+🎯 <b>Channel:</b> ${chat || '@sharemarket_price_action_signals'}
+🕒 <b>Connected At:</b> ${new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })} IST
+
+⚡ <i>All verified resistance breakouts, support breakdowns, and reversal signals will now be instantly broadcasted to this channel.</i>
+━━━━━━━━━━━━━━━━━━━━━
+⚠️ <i>SEBI Statutory Disclaimer: Simulation & educational signal feed.</i>
+`.trim();
+
+  const dispatchResult = await sendTelegramBroadcast(testMessage, token, chat);
+
+  auditLogs.unshift({
+    id: `log-${Date.now()}`,
+    timestamp: new Date().toISOString(),
+    user: 'developer_admin',
+    action: 'TELEGRAM_TEST_DISPATCH',
+    category: 'ALERT',
+    status: dispatchResult.success ? 'SUCCESS' : 'WARNING',
+    details: `Telegram test message sent to ${chat} (${dispatchResult.mode} mode)`,
+    ipAddress: req.ip || '127.0.0.1',
+  });
+
+  res.json({
+    success: dispatchResult.success,
+    mode: dispatchResult.mode,
+    chatId: chat,
+    messageId: dispatchResult.messageId,
+    message: dispatchResult.success
+      ? `Telegram test alert dispatched successfully to ${chat} (${dispatchResult.mode} mode)!`
+      : `Telegram dispatch notice: ${dispatchResult.error || 'Check Bot Token or Channel ID'}`,
+    error: dispatchResult.error,
+  });
+});
+
 app.post('/api/alerts/webhook/test', (req: Request, res: Response) => {
   const { channel, recipient, botToken, webhookUrl, customMessage } = req.body;
 
@@ -900,6 +1128,100 @@ app.post('/api/broker/angelone/connect-websocket', (req: Request, res: Response)
     success: true,
     message: 'Angel One SmartAPI WebSocket 2.0 streaming initiated!',
     feedState: angelOneStreamer.getFeedState(),
+  });
+});
+
+// =============================================================
+// Price Action Strategy Engine & Edge Finding Endpoints
+// =============================================================
+
+// Get all verified Price Action Signals and current day track record
+app.get('/api/price-action/signals', (req: Request, res: Response) => {
+  const index = req.query.index as string | undefined;
+  const signals = priceActionEngine.getSignals(index);
+  const statistics = priceActionEngine.getEngineStatistics(index);
+  const profiles = priceActionEngine.getAllProfiles();
+
+  res.json({
+    success: true,
+    signals,
+    statistics,
+    profiles,
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// Get calibrated index edge profiles
+app.get('/api/price-action/profiles', (req: Request, res: Response) => {
+  const profiles = priceActionEngine.getAllProfiles();
+  res.json({
+    success: true,
+    profiles,
+  });
+});
+
+// Run historical edge backtest and calibration simulation
+app.post('/api/price-action/backtest', (req: Request, res: Response) => {
+  const { indexSymbol = 'NIFTY 50', period = '6M', customCalibration } = req.body || {};
+  const result = priceActionEngine.runHistoricalEdgeBacktest(indexSymbol, period, customCalibration);
+
+  auditLogs.unshift({
+    id: `log-${Date.now()}`,
+    timestamp: new Date().toISOString(),
+    user: devSettings.angelOne.clientCode || 'DCP78912',
+    action: 'PRICE_ACTION_BACKTEST',
+    category: 'TRADE',
+    status: 'SUCCESS',
+    details: `Price Action Backtest & Edge Calibration run for ${indexSymbol} (${period}). Win Rate: ${result.winRatePercent}%, Net Points: +${result.netPointsCaptured} pts, Optimal RR: ${result.calibratedOptimalRatio}`,
+    ipAddress: req.ip || '127.0.0.1',
+  });
+
+  res.json({
+    success: true,
+    result,
+  });
+});
+
+// Calibrate index edge parameters
+app.post('/api/price-action/calibrate', (req: Request, res: Response) => {
+  const { indexSymbol, updates } = req.body || {};
+  if (!indexSymbol) {
+    return res.status(400).json({ success: false, error: 'indexSymbol is required' });
+  }
+
+  const updatedProfile = priceActionEngine.updateProfileCalibration(indexSymbol, updates || {});
+
+  auditLogs.unshift({
+    id: `log-${Date.now()}`,
+    timestamp: new Date().toISOString(),
+    user: devSettings.angelOne.clientCode || 'DCP78912',
+    action: 'EDGE_CALIBRATION_UPDATED',
+    category: 'DEVELOPER',
+    status: 'SUCCESS',
+    details: `Calibrated parameters updated for ${indexSymbol}: Optimal RR ${updatedProfile.calibratedOptimalTargetRatio}, Vol Threshold ${updatedProfile.breakoutVolumeThreshold}x`,
+    ipAddress: req.ip || '127.0.0.1',
+  });
+
+  res.json({
+    success: true,
+    profile: updatedProfile,
+    message: `Calibration parameters updated successfully for ${indexSymbol}`,
+  });
+});
+
+// Evaluate live bar for S/R Breakout / Reversal or Trap
+app.post('/api/price-action/evaluate', (req: Request, res: Response) => {
+  const { indexSymbol = 'NIFTY 50', currentPrice, candle } = req.body || {};
+  if (!currentPrice || !candle) {
+    return res.status(400).json({ success: false, error: 'currentPrice and candle required' });
+  }
+
+  const signal = priceActionEngine.evaluateLiveCandle(indexSymbol, currentPrice, candle);
+  res.json({
+    success: true,
+    signal,
+    allSignals: priceActionEngine.getSignals(indexSymbol),
+    statistics: priceActionEngine.getEngineStatistics(indexSymbol),
   });
 });
 

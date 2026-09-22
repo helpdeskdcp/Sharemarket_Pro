@@ -162,13 +162,22 @@ export interface GttOrder {
   brokerMode: ExecutionMode;
 }
 
+export interface TelegramWebhookConfig {
+  enabled: boolean;
+  botToken: string;
+  chatId: string;
+  channelName?: string;
+  isConnected: boolean;
+  autoBroadcastSignals: boolean;
+  broadcastBreakouts: boolean;
+  broadcastReversals: boolean;
+  broadcastTargetUpdates: boolean;
+  includeSebiDisclaimer: boolean;
+  customFooter?: string;
+}
+
 export interface AlertWebhookSettings {
-  telegram: {
-    enabled: boolean;
-    botToken: string;
-    chatId: string;
-    isConnected: boolean;
-  };
+  telegram: TelegramWebhookConfig;
   whatsapp: {
     enabled: boolean;
     webhookUrl: string;
@@ -262,11 +271,25 @@ export interface RazorpayCredentials {
   isLive: boolean;
 }
 
+export interface EngineModelSettings {
+  priceActionEngine: boolean;
+  geminiRegimeClassifier: boolean;
+  adaptiveTargetEngine: boolean;
+  angelOneWsFeed: boolean;
+  optionsGreeksEngine: boolean;
+  d3SentimentPhysics: boolean;
+  sebiGuardrails: boolean;
+  audioAlertEngine: boolean;
+  volatilityTrapScanner: boolean;
+  autoTrailingGtt: boolean;
+}
+
 export interface DeveloperSettings {
   angelOne: AngelOneCredentials;
   razorpay: RazorpayCredentials;
   executionMode: ExecutionMode;
   webhooks?: AlertWebhookSettings;
+  engines?: EngineModelSettings;
 }
 
 export interface SubscriptionStatus {
@@ -323,5 +346,159 @@ export interface AngelOneWatchlistData {
   lastUpdated: string;
   totalInstruments: number;
   quotes: AngelOneQuote[];
+}
+
+// ==========================================
+// PRICE ACTION STRATEGY & EDGE FINDING TYPES
+// ==========================================
+
+export type PriceActionPatternType =
+  | 'RESISTANCE_BREAKOUT'
+  | 'SUPPORT_BREAKOUT'
+  | 'SUPPORT_REVERSAL'
+  | 'RESISTANCE_REVERSAL';
+
+export type SignalConfirmationStatus =
+  | 'CONFIRMED_BREAKOUT'
+  | 'CONFIRMED_REVERSAL'
+  | 'FAKEOUT_FILTERED'
+  | 'TRAP_AVOIDED'
+  | 'PENDING_CONFIRMATION';
+
+export type SignalTradeStatus =
+  | 'TRIGGERED'
+  | 'ACTIVE'
+  | 'TARGET_1_HIT'
+  | 'TARGET_2_HIT'
+  | 'TARGET_4_HIT'
+  | 'ADAPTIVE_TARGET_HIT'
+  | 'STOPLOSS_HIT'
+  | 'FILTERED_OUT';
+
+export interface SignalTargetSpec {
+  price: number;
+  ratio: string;
+  points: number;
+  hit: boolean;
+}
+
+export interface AdaptiveTargetSpec {
+  price: number;
+  ratio: string;
+  points: number;
+  probabilityPercent: number;
+  optimalRatioMultiplier: number;
+  reason: string;
+  hit: boolean;
+}
+
+export interface PriceActionSignal {
+  id: string;
+  timestamp: string;
+  timeFormatted: string;
+  indexSymbol: string;
+  underlyingSpot: number;
+  patternType: PriceActionPatternType;
+  bias: 'BULLISH' | 'BEARISH';
+  action: 'BUY'; // Buying Option Contracts (CE or PE)
+  optionType: 'CE' | 'PE';
+  strikePrice: number;
+  optionSymbol: string;
+  optionEntryPrice: number;
+  optionStopLoss: number;
+  optionStopLossPoints: number;
+  target1: SignalTargetSpec; // 1:2 standard
+  target2: SignalTargetSpec; // 1:3 standard
+  target4: SignalTargetSpec; // 1:4 standard
+  adaptiveTarget: AdaptiveTargetSpec; // Dynamically calibrated based on edge probability (e.g. 1:1.5, 1:1.8, 1:9)
+  confirmationStatus: SignalConfirmationStatus;
+  tradeStatus: SignalTradeStatus;
+  currentOptionPrice: number;
+  pointsCaptured: number;
+  maxPointsReached: number;
+  pnlPercent: number;
+  confidenceScore: number;
+  daySignalNumber: number; // 1 to 4 max per day
+  keyLevel: number;
+  volumeMultiplier: number;
+  rejectionWickPercent?: number;
+  trapDetails?: string;
+  rationale: string;
+  marathiRationale: string;
+}
+
+export interface IndexEdgeProfile {
+  indexSymbol: string;
+  name: string;
+  lotSize: number;
+  strikeStep: number;
+  typicalAtr: number;
+  dailySignalLimit: number;
+  breakoutVolumeThreshold: number;
+  minWickRejectionPercent: number;
+  calibratedOptimalTargetRatio: string;
+  calibratedProbabilityPercent: number;
+  historicalWinRate: number;
+  historicalProfitFactor: number;
+  totalPointsWonMonth: number;
+  avgWinPoints: number;
+  avgLossPoints: number;
+  trapDetectionScore: number; // % accuracy in filtering fakeouts
+  supportLevels: number[];
+  resistanceLevels: number[];
+  volatilityRegime: 'LOW' | 'NORMAL' | 'HIGH' | 'EXPANDING';
+}
+
+export interface PriceActionBacktestTrade {
+  id: string;
+  date: string;
+  time: string;
+  indexSymbol: string;
+  patternType: PriceActionPatternType;
+  optionSymbol: string;
+  entryPrice: number;
+  exitPrice: number;
+  stopLoss: number;
+  targetPrice: number;
+  points: number;
+  result: 'WIN' | 'LOSS';
+  hitTarget: string;
+  riskReward: string;
+  edgeProbabilityAtEntry: number;
+  trapAvoided: boolean;
+}
+
+export interface PriceActionBacktestResult {
+  indexSymbol: string;
+  period: string;
+  totalSignalsDetected: number;
+  fakeoutsFilteredCount: number;
+  confirmedTradesCount: number;
+  winningTradesCount: number;
+  losingTradesCount: number;
+  winRatePercent: number;
+  netPointsCaptured: number;
+  profitFactor: number;
+  expectancyPointsPerTrade: number;
+  t1HitRatePercent: number;
+  t2HitRatePercent: number;
+  adaptiveTargetHitRatePercent: number;
+  maxConsecutiveWins: number;
+  maxDrawdownPoints: number;
+  calibratedOptimalRatio: string;
+  calibratedThresholds: {
+    breakoutBufferPoints: number;
+    volumeMultiplier: number;
+    wickFilterPercent: number;
+    optimalTargetRatio: string;
+  };
+  probabilityDistribution: Array<{
+    ratio: string;
+    multiplier: number;
+    winRatePercent: number;
+    expectedValuePoints: number;
+    isOptimalEdge: boolean;
+  }>;
+  trades: PriceActionBacktestTrade[];
 }
 
