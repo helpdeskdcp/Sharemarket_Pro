@@ -386,49 +386,15 @@ export async function runStrategyBacktest(
   timeframe: '6M' | '1Y' | '3Y' = '1Y',
   symbol: string = 'NIFTY 50'
 ): Promise<BacktestResult> {
-  try {
-    const res = await fetch('/api/strategy/backtest', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ strategyId, timeframe, symbol }),
-    });
-    if (!res.ok) throw new Error(`HTTP error ${res.status}`);
-    const json = await res.json();
-    return json.data;
-  } catch (err) {
-    console.warn('Fallback backtest computation:', err);
-    // Return robust fallback
-    return {
-      strategyId,
-      strategyName: 'Iron Condor (Delta-Neutral)',
-      timeframe,
-      totalTrades: timeframe === '6M' ? 142 : timeframe === '1Y' ? 284 : 852,
-      winTrades: timeframe === '6M' ? 98 : timeframe === '1Y' ? 198 : 596,
-      lossTrades: timeframe === '6M' ? 44 : timeframe === '1Y' ? 86 : 256,
-      winRatePercent: 69.7,
-      profitFactor: 1.92,
-      cagrPercent: 26.4,
-      maxDrawdownPercent: -7.2,
-      netPnl: 342800,
-      sharpeRatio: 1.86,
-      monthlyBreakdown: [
-        { month: "Jan '25", pnl: 28400, winRate: 72, trades: 24 },
-        { month: "Feb '25", pnl: 32100, winRate: 75, trades: 22 },
-        { month: "Mar '25", pnl: -9800, winRate: 58, trades: 26 },
-        { month: "Apr '25", pnl: 41200, winRate: 78, trades: 25 },
-        { month: "May '25", pnl: 36500, winRate: 74, trades: 23 },
-        { month: "Jun '25", pnl: 29800, winRate: 71, trades: 24 },
-      ],
-      equityCurve: [
-        { date: "Jan '25", equity: 100000, benchmark: 100000 },
-        { date: "Feb '25", equity: 128400, benchmark: 102400 },
-        { date: "Mar '25", equity: 160500, benchmark: 104800 },
-        { date: "Apr '25", equity: 150700, benchmark: 103200 },
-        { date: "May '25", equity: 191900, benchmark: 106900 },
-        { date: "Jun '25", equity: 228400, benchmark: 110200 },
-      ],
-    };
-  }
+  // No client-side fallback: the old one returned fixed, invented results.
+  const res = await fetch('/api/strategy/backtest', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ strategyId, timeframe, symbol }),
+  });
+  const json = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(json?.error || `HTTP error ${res.status}`);
+  return json.data;
 }
 
 export async function fetchAngelOneLtp(symbol: string, exchange?: string): Promise<any> {
@@ -513,7 +479,7 @@ export async function calibrateIndexProfile(
 ): Promise<{ success: boolean; profile: any; message: string }> {
   const res = await fetch('/api/price-action/calibrate', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...adminHeaders() },
     body: JSON.stringify({ indexSymbol, updates }),
   });
   if (!res.ok) throw new Error(`HTTP error ${res.status}`);

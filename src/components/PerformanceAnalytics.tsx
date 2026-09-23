@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   ResponsiveContainer,
   AreaChart,
@@ -32,11 +32,15 @@ import {
   Zap,
 } from 'lucide-react';
 import { useTrading } from '../context/TradingContext';
+import { PriceActionSignal } from '../types/market';
+import { fetchPriceActionSignals } from '../services/api';
 
 interface AnalyticsPeriodData {
   date: string;
   cumulativePoints: number;
   equityRupees: number;
+  tradeRupees: number;
+  closedAtMs: number;
   tradePoints: number;
   drawdownPercent: number;
   drawdownPoints: number;
@@ -51,33 +55,38 @@ export const PerformanceAnalytics: React.FC = () => {
   const [timeRange, setTimeRange] = useState<'1M' | '3M' | '6M' | 'ALL'>('6M');
   const [metricUnit, setMetricUnit] = useState<'POINTS' | 'INR'>('POINTS');
 
-  // Verified Historical Performance Dataset across Indices & MCX Commodities
-  const rawHistoricalTrades: AnalyticsPeriodData[] = useMemo(() => {
-    return [
-      { date: '01 Aug', tradePoints: 48.0, cumulativePoints: 48.0, equityRupees: 36000, drawdownPercent: 0, drawdownPoints: 0, tradeType: 'RESISTANCE_BREAKOUT', index: 'NIFTY 50', result: 'WIN' },
-      { date: '04 Aug', tradePoints: -22.0, cumulativePoints: 26.0, equityRupees: 19500, drawdownPercent: 4.5, drawdownPoints: 22.0, tradeType: 'SUPPORT_BREAKOUT', index: 'NIFTY 50', result: 'LOSS' },
-      { date: '07 Aug', tradePoints: 120.0, cumulativePoints: 146.0, equityRupees: 109500, drawdownPercent: 0, drawdownPoints: 0, tradeType: 'SUPPORT_REVERSAL', index: 'BANKNIFTY', result: 'WIN' },
-      { date: '11 Aug', tradePoints: 73.5, cumulativePoints: 219.5, equityRupees: 164625, drawdownPercent: 0, drawdownPoints: 0, tradeType: 'RESISTANCE_BREAKOUT', index: 'NIFTY 50', result: 'WIN' },
-      { date: '14 Aug', tradePoints: 42.0, cumulativePoints: 261.5, equityRupees: 196125, drawdownPercent: 0, drawdownPoints: 0, tradeType: 'SUPPORT_REVERSAL', index: 'FINNIFTY', result: 'WIN' },
-      { date: '16 Aug', tradePoints: 110.0, cumulativePoints: 371.5, equityRupees: 110000, drawdownPercent: 0, drawdownPoints: 0, tradeType: 'RESISTANCE_BREAKOUT', index: 'CRUDEOIL', result: 'WIN' },
-      { date: '18 Aug', tradePoints: -45.0, cumulativePoints: 326.5, equityRupees: 85000, drawdownPercent: 6.2, drawdownPoints: 45.0, tradeType: 'RESISTANCE_REVERSAL', index: 'BANKNIFTY', result: 'LOSS' },
-      { date: '20 Aug', tradePoints: 6.2, cumulativePoints: 332.7, equityRupees: 77500, drawdownPercent: 0, drawdownPoints: 0, tradeType: 'SUPPORT_BREAKOUT', index: 'NATURALGAS', result: 'WIN' },
-      { date: '22 Aug', tradePoints: 180.0, cumulativePoints: 512.7, equityRupees: 297375, drawdownPercent: 0, drawdownPoints: 0, tradeType: 'RESISTANCE_REVERSAL', index: 'BANKNIFTY', result: 'WIN' },
-      { date: '24 Aug', tradePoints: 340.0, cumulativePoints: 852.7, equityRupees: 340000, drawdownPercent: 0, drawdownPoints: 0, tradeType: 'RESISTANCE_BREAKOUT', index: 'GOLD', result: 'WIN' },
-      { date: '25 Aug', tradePoints: 56.0, cumulativePoints: 908.7, equityRupees: 339375, drawdownPercent: 0, drawdownPoints: 0, tradeType: 'SUPPORT_BREAKOUT', index: 'MIDCPNIFTY', result: 'WIN' },
-      { date: '27 Aug', tradePoints: 680.0, cumulativePoints: 1588.7, equityRupees: 204000, drawdownPercent: 0, drawdownPoints: 0, tradeType: 'SUPPORT_REVERSAL', index: 'SILVER', result: 'WIN' },
-      { date: '29 Aug', tradePoints: 39.5, cumulativePoints: 1628.2, equityRupees: 369000, drawdownPercent: 0, drawdownPoints: 0, tradeType: 'RESISTANCE_BREAKOUT', index: 'NIFTY 50', result: 'WIN' },
-      { date: '02 Sep', tradePoints: -18.0, cumulativePoints: 1610.2, equityRupees: 355500, drawdownPercent: 2.5, drawdownPoints: 18.0, tradeType: 'SUPPORT_REVERSAL', index: 'FINNIFTY', result: 'LOSS' },
-      { date: '04 Sep', tradePoints: 95.0, cumulativePoints: 1705.2, equityRupees: 95000, drawdownPercent: 0, drawdownPoints: 0, tradeType: 'SUPPORT_BREAKOUT', index: 'CRUDEOIL', result: 'WIN' },
-      { date: '06 Sep', tradePoints: 140.0, cumulativePoints: 1845.2, equityRupees: 460500, drawdownPercent: 0, drawdownPoints: 0, tradeType: 'RESISTANCE_BREAKOUT', index: 'SENSEX', result: 'WIN' },
-      { date: '09 Sep', tradePoints: 65.0, cumulativePoints: 1910.2, equityRupees: 509250, drawdownPercent: 0, drawdownPoints: 0, tradeType: 'SUPPORT_REVERSAL', index: 'NIFTY 50', result: 'WIN' },
-      { date: '12 Sep', tradePoints: 110.0, cumulativePoints: 2020.2, equityRupees: 591750, drawdownPercent: 0, drawdownPoints: 0, tradeType: 'SUPPORT_BREAKOUT', index: 'BANKNIFTY', result: 'WIN' },
-      { date: '14 Sep', tradePoints: 4.8, cumulativePoints: 2025.0, equityRupees: 60000, drawdownPercent: 0, drawdownPoints: 0, tradeType: 'RESISTANCE_BREAKOUT', index: 'NATURALGAS', result: 'WIN' },
-      { date: '15 Sep', tradePoints: -30.0, cumulativePoints: 1995.0, equityRupees: 569250, drawdownPercent: 3.8, drawdownPoints: 30.0, tradeType: 'RESISTANCE_BREAKOUT', index: 'BANKNIFTY', result: 'LOSS' },
-      { date: '18 Sep', tradePoints: 44.0, cumulativePoints: 2039.0, equityRupees: 602250, drawdownPercent: 0, drawdownPoints: 0, tradeType: 'RESISTANCE_BREAKOUT', index: 'NIFTY 50', result: 'WIN' },
-      { date: '21 Sep', tradePoints: 132.0, cumulativePoints: 2171.0, equityRupees: 701250, drawdownPercent: 0, drawdownPoints: 0, tradeType: 'SUPPORT_REVERSAL', index: 'BANKNIFTY', result: 'WIN' },
-    ];
+  // Closed signals from the live engine (liveSignalEngine.ts) -- the only
+  // source of performance data. Empty until real trades close.
+  const [liveSignals, setLiveSignals] = useState<PriceActionSignal[]>([]);
+  useEffect(() => {
+    const load = () =>
+      fetchPriceActionSignals('ALL')
+        .then(res => res.success && setLiveSignals(res.signals))
+        .catch(err => console.warn('Failed to load live signal performance:', err));
+    load();
+    const timer = setInterval(load, 60000);
+    return () => clearInterval(timer);
   }, []);
+
+  const rawHistoricalTrades: AnalyticsPeriodData[] = useMemo(() => {
+    const openStatuses = ['ACTIVE', 'TARGET_1_HIT', 'TARGET_2_HIT'];
+    return liveSignals
+      .filter(sig => sig.source === 'LIVE_ENGINE' && !openStatuses.includes(sig.tradeStatus))
+      .sort((a, b) => (a.closedAt || a.timestamp).localeCompare(b.closedAt || b.timestamp))
+      .map(sig => ({
+        date: new Date(sig.closedAt || sig.timestamp).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', timeZone: 'Asia/Kolkata' }),
+        closedAtMs: new Date(sig.closedAt || sig.timestamp).getTime(),
+        tradePoints: sig.pointsCaptured,
+        tradeRupees: Number((sig.pointsCaptured * (sig.lotSize || 1)).toFixed(0)),
+        cumulativePoints: 0,
+        equityRupees: 0,
+        drawdownPercent: 0,
+        drawdownPoints: 0,
+        tradeType: sig.patternType,
+        index: sig.indexSymbol,
+        result: sig.pointsCaptured > 0 ? 'WIN' : 'LOSS',
+      }));
+  }, [liveSignals]);
 
   // Filter dataset by index
   const filteredData = useMemo(() => {
@@ -86,10 +95,10 @@ export const PerformanceAnalytics: React.FC = () => {
       list = list.filter((d) => d.index.toUpperCase() === selectedIndex.toUpperCase());
     }
 
-    if (timeRange === '1M') {
-      list = list.slice(-6);
-    } else if (timeRange === '3M') {
-      list = list.slice(-10);
+    const rangeDays = { '1M': 30, '3M': 90, '6M': 180, ALL: 0 }[timeRange];
+    if (rangeDays) {
+      const cutoff = Date.now() - rangeDays * 24 * 60 * 60 * 1000;
+      list = list.filter((d) => d.closedAtMs >= cutoff);
     }
 
     // Recompute cumulative curve & drawdowns for clean display
@@ -125,8 +134,14 @@ export const PerformanceAnalytics: React.FC = () => {
 
     const avgWin = winCount > 0 ? Number((totalWinPts / winCount).toFixed(1)) : 0;
     const avgLoss = lossCount > 0 ? Number((totalLossPts / lossCount).toFixed(1)) : 0;
-    const payoffRatio = avgLoss > 0 ? Number((avgWin / avgLoss).toFixed(2)) : Number((avgWin > 0 ? 3.0 : 1.0).toFixed(2));
-    const profitFactor = totalLossPts > 0 ? Number((totalWinPts / totalLossPts).toFixed(2)) : 3.8;
+    // 0 = not enough closed trades to compute (no invented fallback values)
+    const payoffRatio = avgLoss > 0 ? Number((avgWin / avgLoss).toFixed(2)) : 0;
+    const profitFactor = totalLossPts > 0 ? Number((totalWinPts / totalLossPts).toFixed(2)) : 0;
+
+    // Rupees per lot, using each contract's real lot size
+    const avgWinRupees = winCount > 0 ? Math.round(wins.reduce((sum, d) => sum + d.tradeRupees, 0) / winCount) : 0;
+    const avgLossRupees = lossCount > 0 ? Math.round(Math.abs(losses.reduce((sum, d) => sum + d.tradeRupees, 0)) / lossCount) : 0;
+    const netRupees = Math.round(filteredData.reduce((sum, d) => sum + d.tradeRupees, 0));
 
     // Max Drawdown
     let maxDrawdownPts = 0;
@@ -146,6 +161,9 @@ export const PerformanceAnalytics: React.FC = () => {
       avgLoss,
       payoffRatio,
       profitFactor,
+      avgWinRupees,
+      avgLossRupees,
+      netRupees,
       maxDrawdownPts,
       maxDrawdownPct,
     };
@@ -161,13 +179,17 @@ export const PerformanceAnalytics: React.FC = () => {
 
   // Pattern Win Rate Breakdown
   const patternBreakdownData = useMemo(() => {
-    return [
-      { pattern: 'Resistance Breakout', winRate: 83.3, trades: 6, avgPts: 52.5 },
-      { pattern: 'Support Reversal', winRate: 80.0, trades: 5, avgPts: 88.2 },
-      { pattern: 'Support Breakout', winRate: 75.0, trades: 4, avgPts: 62.0 },
-      { pattern: 'Resistance Reversal', winRate: 66.7, trades: 3, avgPts: 112.5 },
-    ];
-  }, []);
+    const groups: Record<string, AnalyticsPeriodData[]> = {};
+    filteredData.forEach((d) => {
+      (groups[d.tradeType] = groups[d.tradeType] || []).push(d);
+    });
+    return Object.entries(groups).map(([type, list]) => ({
+      pattern: type.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase()),
+      winRate: Number(((list.filter((d) => d.result === 'WIN').length / list.length) * 100).toFixed(1)),
+      trades: list.length,
+      avgPts: Number((list.reduce((sum, d) => sum + d.tradePoints, 0) / list.length).toFixed(1)),
+    }));
+  }, [filteredData]);
 
   // Avg Profit vs Avg Loss Comparison Data
   const profitLossBarData = useMemo(() => {
@@ -184,6 +206,12 @@ export const PerformanceAnalytics: React.FC = () => {
 
   return (
     <div className="bg-[#0b101d] rounded-xl border border-slate-800/90 flex flex-col overflow-hidden shadow-2xl font-mono text-slate-100">
+      {rawHistoricalTrades.length === 0 && (
+        <div className="px-4 py-2 bg-amber-500/10 border-b border-amber-500/40 text-xs text-amber-200">
+          No closed live signals yet. Figures appear here only from real live-engine trades as they close
+          (earlier sample data has been removed).
+        </div>
+      )}
       {/* Header Bar */}
       <div className="p-4 bg-gradient-to-r from-slate-900 via-[#0d1527] to-slate-900 border-b border-slate-800 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
@@ -196,7 +224,7 @@ export const PerformanceAnalytics: React.FC = () => {
                 Chanakya Pro Engine: Performance Analytics
               </h2>
               <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
-                PROBABILITY CALIBRATED
+                LIVE SIGNALS ONLY
               </span>
             </div>
             <p className="text-xs text-slate-400 mt-0.5">
@@ -296,14 +324,14 @@ export const PerformanceAnalytics: React.FC = () => {
           </div>
           <div className="mt-2">
             <div className="text-xl sm:text-2xl font-bold text-cyan-400">
-              +{metricUnit === 'POINTS' ? `${stats.avgWin} pts` : `₹${(stats.avgWin * 25).toLocaleString('en-IN')}`}
+              +{metricUnit === 'POINTS' ? `${stats.avgWin} pts` : `₹${stats.avgWinRupees.toLocaleString('en-IN')}`}
             </div>
             <div className="text-xs text-rose-400 mt-0.5">
-              Avg Loss: -{metricUnit === 'POINTS' ? `${stats.avgLoss} pts` : `₹${(stats.avgLoss * 25).toLocaleString('en-IN')}`}
+              Avg Loss: -{metricUnit === 'POINTS' ? `${stats.avgLoss} pts` : `₹${stats.avgLossRupees.toLocaleString('en-IN')}`}
             </div>
           </div>
           <div className="text-[10px] text-slate-400 mt-2">
-            Payoff Ratio: <strong className="text-emerald-400">{stats.payoffRatio}x R:R</strong>
+            Payoff Ratio: <strong className="text-emerald-400">{stats.payoffRatio ? `${stats.payoffRatio}x R:R` : '-'}</strong>
           </div>
         </div>
 
@@ -334,10 +362,10 @@ export const PerformanceAnalytics: React.FC = () => {
           </div>
           <div className="mt-2">
             <div className="text-xl sm:text-2xl font-bold text-orange-400">
-              +{metricUnit === 'POINTS' ? `${stats.netPoints} pts` : `₹${(stats.netPoints * 25).toLocaleString('en-IN')}`}
+              {stats.netPoints > 0 ? '+' : ''}{metricUnit === 'POINTS' ? `${stats.netPoints} pts` : `₹${stats.netRupees.toLocaleString('en-IN')}`}
             </div>
             <div className="text-xs text-emerald-400 mt-0.5">
-              Profit Factor: {stats.profitFactor}
+              Profit Factor: {stats.profitFactor || '-'}
             </div>
           </div>
           <div className="text-[10px] text-slate-400 mt-2">
@@ -434,7 +462,7 @@ export const PerformanceAnalytics: React.FC = () => {
               Win / Loss Distribution
             </h3>
             <p className="text-[11px] text-slate-400">
-              Verified outcomes of confirmed signals
+              Closed live-engine signals
             </p>
           </div>
 

@@ -34,7 +34,6 @@ import {
 } from '../types/market';
 import {
   fetchPriceActionSignals,
-  runPriceActionBacktest,
   calibrateIndexProfile,
   broadcastTargetWinToTelegram,
 } from '../services/api';
@@ -56,7 +55,7 @@ export const PriceActionSignalsDashboard: React.FC = () => {
   const [profiles, setProfiles] = useState<Record<string, IndexEdgeProfile>>({});
   const [statistics, setStatistics] = useState<any>(null);
   const [loading, setLoading] = useState<boolean>(true);
-  const [expandedSignalId, setExpandedSignalId] = useState<string | null>('SIG-NIFTY-001');
+  const [expandedSignalId, setExpandedSignalId] = useState<string | null>(null);
   const [executionMessage, setExecutionMessage] = useState<string | null>(null);
   const [telegramBroadcastStatus, setTelegramBroadcastStatus] = useState<{ id?: string; message: string; mode?: string } | null>(null);
   const [broadcastingSignalId, setBroadcastingSignalId] = useState<string | null>(null);
@@ -65,7 +64,6 @@ export const PriceActionSignalsDashboard: React.FC = () => {
   const [showCalibrationModal, setShowCalibrationModal] = useState<boolean>(false);
   const [backtestIndex, setBacktestIndex] = useState<string>('NIFTY 50');
   const [backtestPeriod, setBacktestPeriod] = useState<'3M' | '6M' | '1Y'>('6M');
-  const [backtestLoading, setBacktestLoading] = useState<boolean>(false);
   const [backtestResult, setBacktestResult] = useState<PriceActionBacktestResult | null>(null);
 
   // Calibration Custom Adjusters
@@ -134,7 +132,7 @@ export const PriceActionSignalsDashboard: React.FC = () => {
       return;
     }
 
-    const lotSize = currentProfile.lotSize || 25;
+    const lotSize = sig.lotSize || currentProfile.lotSize || 25;
     const res = placeOrder({
       symbol: sig.optionSymbol,
       side: sig.action,
@@ -153,22 +151,10 @@ export const PriceActionSignalsDashboard: React.FC = () => {
   };
 
   // Run Backtest & Edge Calibration
-  const handleRunBacktest = async (indexTarget = backtestIndex, period = backtestPeriod) => {
-    setBacktestLoading(true);
-    try {
-      const res = await runPriceActionBacktest(indexTarget, period, {
-        breakoutVolumeMultiplier: customVolThreshold,
-        minWickRejectionPercent: customWickPercent,
-        targetRatio: customTargetRatio,
-      });
-      if (res.success && res.result) {
-        setBacktestResult(res.result);
-      }
-    } catch (e) {
-      console.warn('Backtest execution failed:', e);
-    } finally {
-      setBacktestLoading(false);
-    }
+  // Disabled: the previous results were generated from fixed win-rate
+  // tables and random numbers, not historical market data.
+  const handleRunBacktest = async (_indexTarget = backtestIndex, _period = backtestPeriod) => {
+    setBacktestResult(null);
   };
 
   // Save new calibrated parameters
@@ -378,10 +364,12 @@ export const PriceActionSignalsDashboard: React.FC = () => {
                 <Award className="h-4 w-4 text-emerald-400" />
               </div>
               <div className="text-xl sm:text-2xl font-bold font-mono text-emerald-400 mt-1">
-                {statistics ? `${statistics.winRatePercent}%` : '79.2%'}
+                {statistics && statistics.winningCount + statistics.losingCount > 0 ? `${statistics.winRatePercent}%` : '-'}
               </div>
               <div className="text-[10px] text-slate-400 mt-0.5">
-                {statistics ? `${statistics.winningCount} Wins / ${statistics.losingCount} Losses` : 'Verified on Real Data'}
+                {statistics && statistics.winningCount + statistics.losingCount > 0
+                  ? `${statistics.winningCount} Wins / ${statistics.losingCount} Losses (live signals)`
+                  : 'No closed live signals yet'}
               </div>
             </div>
 
@@ -391,10 +379,10 @@ export const PriceActionSignalsDashboard: React.FC = () => {
                 <TrendingUp className="h-4 w-4 text-cyan-400" />
               </div>
               <div className="text-xl sm:text-2xl font-bold font-mono text-cyan-400 mt-1">
-                {statistics ? `+${statistics.netPoints.toLocaleString('en-IN')} pts` : '+1,480.5 pts'}
+                {statistics ? `${statistics.netPoints > 0 ? '+' : ''}${statistics.netPoints.toLocaleString('en-IN')} pts` : '-'}
               </div>
               <div className="text-[10px] text-slate-400 mt-0.5">
-                Profit Factor: <strong className="text-white">{statistics ? statistics.profitFactor : '3.12'}</strong>
+                Profit Factor: <strong className="text-white">{statistics && statistics.profitFactor > 0 ? statistics.profitFactor : '-'}</strong>
               </div>
             </div>
 
@@ -404,10 +392,10 @@ export const PriceActionSignalsDashboard: React.FC = () => {
                 <ShieldCheck className="h-4 w-4 text-indigo-400" />
               </div>
               <div className="text-xl sm:text-2xl font-bold font-mono text-indigo-300 mt-1">
-                {statistics ? `${statistics.fakeoutsAvoidedCount} Traps Avoided` : '18 Traps'}
+                {statistics ? `${statistics.fakeoutsAvoidedCount} Traps Avoided` : '-'}
               </div>
               <div className="text-[10px] text-slate-400 mt-0.5">
-                Trap Detection: <strong className="text-emerald-400">94.5% Accuracy</strong>
+                Signals rejected by the live filters
               </div>
             </div>
 
@@ -420,7 +408,7 @@ export const PriceActionSignalsDashboard: React.FC = () => {
                 {currentProfile.calibratedOptimalTargetRatio}
               </div>
               <div className="text-[10px] text-slate-400 mt-0.5">
-                Probability Peak: <strong className="text-white">{currentProfile.calibratedProbabilityPercent}%</strong>
+                Live signals use fixed 1:2 / 1:3 / 1:4 targets
               </div>
             </div>
           </div>
@@ -867,12 +855,11 @@ export const PriceActionSignalsDashboard: React.FC = () => {
 
                 <div className="flex items-end gap-2">
                   <button
-                    onClick={() => handleRunBacktest(backtestIndex, backtestPeriod)}
-                    disabled={backtestLoading}
-                    className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2 rounded-lg text-xs flex items-center justify-center gap-1.5 cursor-pointer transition shadow"
+                    disabled
+                    className="flex-1 bg-slate-700 text-slate-400 font-bold py-2 rounded-lg text-xs flex items-center justify-center gap-1.5 cursor-not-allowed"
                   >
-                    <Play className={`h-3.5 w-3.5 fill-current ${backtestLoading ? 'animate-spin' : ''}`} />
-                    {backtestLoading ? 'Testing...' : 'Run Backtest'}
+                    <Play className="h-3.5 w-3.5 fill-current" />
+                    Backtest unavailable
                   </button>
                 </div>
               </div>
@@ -921,13 +908,13 @@ export const PriceActionSignalsDashboard: React.FC = () => {
                     onChange={(e) => setCustomTargetRatio(e.target.value)}
                     className="w-full bg-slate-950 border border-slate-700 rounded p-1.5 text-xs text-white"
                   >
-                    <option value="1:1.5">1:1.5 (High Win Rate 84%)</option>
-                    <option value="1:1.8">1:1.8 (Optimal Expectancy Edge 81.4%)</option>
-                    <option value="1:2.0">1:2.0 (Standard 77.5%)</option>
-                    <option value="1:2.2">1:2.2 (BANKNIFTY High Volatility Edge)</option>
-                    <option value="1:3.0">1:3.0 (62.8% Win Rate)</option>
-                    <option value="1:4.0">1:4.0 (51.5% Win Rate)</option>
-                    <option value="1:9.0">1:9.0 (Trend Runner Multiplier 24.5%)</option>
+                    <option value="1:1.5">1:1.5</option>
+                    <option value="1:1.8">1:1.8</option>
+                    <option value="1:2.0">1:2.0</option>
+                    <option value="1:2.2">1:2.2</option>
+                    <option value="1:3.0">1:3.0</option>
+                    <option value="1:4.0">1:4.0</option>
+                    <option value="1:9.0">1:9.0</option>
                   </select>
                 </div>
               </div>
@@ -943,6 +930,12 @@ export const PriceActionSignalsDashboard: React.FC = () => {
                   {calibrating ? 'Saving...' : 'Save & Calibrate Edge Parameters'}
                 </button>
                 {calibrationSuccess && <span className="text-xs text-emerald-400 font-bold">{calibrationSuccess}</span>}
+              </div>
+
+              <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/40 text-xs text-amber-200 leading-relaxed">
+                <strong>Backtest unavailable.</strong> Earlier backtest results were simulated from fixed win-rate
+                tables and random numbers, not from historical market data, so they have been removed. Real
+                performance is shown from live signals as they close.
               </div>
 
               {/* Backtest Results Visual Display */}

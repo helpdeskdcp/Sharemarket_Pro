@@ -890,14 +890,16 @@ export const DeveloperSettingsModal: React.FC<DeveloperSettingsModalProps> = ({
                   <span className="text-[9px] text-sky-400">HTML Rich Formatted</span>
                 </div>
                 <div className="p-3 rounded bg-slate-950 border border-slate-800/80 text-[11px] text-slate-300 font-mono leading-relaxed whitespace-pre-wrap">
-                  {`🟢 🚀 BUY / LONG CALL - NIFTY 50\n` +
+                  {`(Example layout - prices below are illustrative)\n` +
+                   `🟢 🚀 BUY NIFTY 29SEP2026 23450 CE\n` +
                    `━━━━━━━━━━━━━━━━━━━━━\n` +
-                   `🎯 Signal Type: BREAKOUT\n` +
-                   `💎 Conviction: 88% High Probability | ⚡ Volume: 2.4x vs 20-EMA\n` +
-                   `📍 Entry Trigger: ₹24,840.00\n` +
-                   `• Strict Stop Loss (SL): ₹24,800.00 (-40 pts)\n` +
-                   `• Target 1 (1:1.5): ₹24,900.00 | Target 2 (1:2.0): ₹24,920.00\n` +
-                   `• Target 3 (1:3.0): ₹24,960.00 | Target 4 (Runner): ₹25,000.00\n` +
+                   `📊 Underlying: NIFTY 50 @ 23447.10\n` +
+                   `🎟 Strike: 23450 CE (Call) | Expiry 29SEP2026 | Lot 65\n` +
+                   `🎯 Signal Type: RESISTANCE BREAKOUT @ 23490\n` +
+                   `📐 Setup Score: 73/100 (rule-based, not a win probability)\n` +
+                   `📍 Entry: ₹120.30 | Stop Loss: ₹102.25 (-18.05 pts)\n` +
+                   `• Target 1 (1:2): ₹156.40 | Target 2 (1:3): ₹174.45\n` +
+                   `• Target 3 (Runner) (1:4): ₹192.50\n` +
                    `━━━━━━━━━━━━━━━━━━━━━\n` +
                    `🕒 Dispatched via ${webhookSettings.telegram.channelName || 'Chanakya Pro'}\n` +
                    `⚠️ SEBI Statutory Notice: We are NOT SEBI registered. Dispatched for algorithmic simulation & research.`}

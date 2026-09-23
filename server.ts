@@ -560,7 +560,6 @@ Provide a JSON response with:
   "marketRegime": "detected regime name",
   "volatilityAnalysis": "2-3 sentences analyzing IV and macro cues",
   "recommendedRiskLevel": "${selectedRisk}",
-  "winProbabilityPercent": number between 48.0 and 78.0,
   "strategyName": "e.g. Delta-Neutral Iron Condor or Bull Call Spread",
   "riskRewardRatio": "e.g. 1 : 2.2",
   "targetLevel": number,
@@ -1699,91 +1698,11 @@ app.post('/api/alerts/webhook/test', (req: Request, res: Response) => {
 // -------------------------------------------------------------
 // Strategy Backtesting Engine
 // -------------------------------------------------------------
+// Removed: returned random monthly results, not a backtest on market data.
 app.post('/api/strategy/backtest', (req: Request, res: Response) => {
-  const { strategyId, timeframe = '1Y', symbol = 'NIFTY 50' } = req.body;
-
-  const strat = WORLD_CLASS_STRATEGIES.find(s => s.id === strategyId) || WORLD_CLASS_STRATEGIES[0];
-  const monthsCount = timeframe === '6M' ? 6 : timeframe === '1Y' ? 12 : 36;
-  
-  // Base realistic performance based on strategy profile
-  let baseWinRate = strat.winProbabilityPercent;
-  let profitFactor = strat.category === 'NON_DIRECTIONAL' ? 1.82 : 2.14;
-  let cagr = strat.category === 'NON_DIRECTIONAL' ? 24.8 : 32.5;
-  let maxDD = strat.category === 'NON_DIRECTIONAL' ? -6.8 : -11.4;
-
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  const monthlyBreakdown = [];
-  let currentEquity = 100000;
-  let benchmarkEquity = 100000;
-  const equityCurve = [];
-
-  const now = new Date();
-  for (let i = monthsCount - 1; i >= 0; i--) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-    const mName = `${months[d.getMonth()]} '${d.getFullYear().toString().slice(-2)}`;
-    
-    // Probabilistic monthly return
-    const isWin = Math.random() < (baseWinRate / 100);
-    const returnPct = isWin
-      ? (1.5 + Math.random() * 4.2)
-      : -(0.8 + Math.random() * 2.8);
-
-    const monthlyPnl = Math.round(currentEquity * (returnPct / 100));
-    currentEquity += monthlyPnl;
-
-    const benchmarkReturnPct = (Math.random() - 0.42) * 3.5;
-    benchmarkEquity += Math.round(benchmarkEquity * (benchmarkReturnPct / 100));
-
-    monthlyBreakdown.push({
-      month: mName,
-      pnl: monthlyPnl,
-      winRate: Math.round((isWin ? baseWinRate + (Math.random() * 4 - 2) : baseWinRate - 8) * 10) / 10,
-      trades: Math.floor(14 + Math.random() * 12),
-    });
-
-    equityCurve.push({
-      date: mName,
-      equity: Math.round(currentEquity),
-      benchmark: Math.round(benchmarkEquity),
-    });
-  }
-
-  const totalTrades = monthlyBreakdown.reduce((acc, m) => acc + m.trades, 0);
-  const winTrades = Math.round(totalTrades * (baseWinRate / 100));
-  const lossTrades = totalTrades - winTrades;
-  const netPnl = currentEquity - 100000;
-
-  const result: BacktestResult = {
-    strategyId: strat.id,
-    strategyName: strat.name,
-    timeframe,
-    totalTrades,
-    winTrades,
-    lossTrades,
-    winRatePercent: baseWinRate,
-    profitFactor,
-    cagrPercent: cagr,
-    maxDrawdownPercent: maxDD,
-    netPnl,
-    sharpeRatio: 1.84,
-    monthlyBreakdown,
-    equityCurve,
-  };
-
-  auditLogs.unshift({
-    id: `log-${Date.now()}`,
-    timestamp: new Date().toISOString(),
-    user: devSettings.angelOne.clientCode || 'operator',
-    action: 'BACKTEST_EXECUTED',
-    category: 'TRADE',
-    status: 'SUCCESS',
-    details: `Backtest executed for ${strat.name} (${timeframe}) on ${symbol}. Net P&L: ₹${netPnl.toLocaleString('en-IN')}, Win Rate: ${baseWinRate}%`,
-    ipAddress: req.ip || '127.0.0.1',
-  });
-
-  res.json({
-    success: true,
-    data: result,
+  res.status(410).json({
+    success: false,
+    error: 'Backtest unavailable: results were simulated (fixed win-rate tables and random numbers), not computed from historical market data',
   });
 });
 
@@ -1877,29 +1796,17 @@ app.get('/api/price-action/profiles', (req: Request, res: Response) => {
 });
 
 // Run historical edge backtest and calibration simulation
+// Removed: returned fixed win-rate tables plus random noise, not a backtest.
 app.post('/api/price-action/backtest', (req: Request, res: Response) => {
-  const { indexSymbol = 'NIFTY 50', period = '6M', customCalibration } = req.body || {};
-  const result = priceActionEngine.runHistoricalEdgeBacktest(indexSymbol, period, customCalibration);
-
-  auditLogs.unshift({
-    id: `log-${Date.now()}`,
-    timestamp: new Date().toISOString(),
-    user: devSettings.angelOne.clientCode || 'DCP78912',
-    action: 'CHANAKYA_PRO_BACKTEST',
-    category: 'TRADE',
-    status: 'SUCCESS',
-    details: `Chanakya Pro Backtest & Edge Calibration run for ${indexSymbol} (${period}). Win Rate: ${result.winRatePercent}%, Net Points: +${result.netPointsCaptured} pts, Optimal RR: ${result.calibratedOptimalRatio}`,
-    ipAddress: req.ip || '127.0.0.1',
-  });
-
-  res.json({
-    success: true,
-    result,
+  res.status(410).json({
+    success: false,
+    error: 'Backtest unavailable: results were simulated (fixed win-rate tables and random numbers), not computed from historical market data',
   });
 });
 
 // Calibrate index edge parameters
-app.post('/api/price-action/calibrate', (req: Request, res: Response) => {
+// Admin-only: these thresholds drive the live signal engine.
+app.post('/api/price-action/calibrate', requireAdmin, (req: Request, res: Response) => {
   const { indexSymbol, updates } = req.body || {};
   if (!indexSymbol) {
     return res.status(400).json({ success: false, error: 'indexSymbol is required' });

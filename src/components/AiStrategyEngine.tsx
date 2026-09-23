@@ -245,16 +245,9 @@ export const AiStrategyEngine: React.FC = () => {
 
             {/* CRITICAL SEBI COMPLIANCE: PROBABILITY IN %, ZERO GUARANTEES */}
             <div className="text-right">
-              <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">
-                Win Probability
-              </div>
-              <div className="font-mono font-extrabold text-2xl text-emerald-400 flex items-center justify-end gap-1">
-                <span>{activeStrategy.winProbabilityPercent}%</span>
-                <span className="text-[11px] font-normal text-slate-400">Prob.</span>
-              </div>
               <div className="text-[10px] text-amber-300 font-semibold flex items-center justify-end gap-1 mt-0.5">
                 <ShieldAlert className="h-3 w-3 text-amber-400" />
-                Strictly Probabilistic • No Guarantee (गॅरंटी)
+                Not a prediction • No Guarantee (गॅरंटी नाही)
               </div>
             </div>
           </div>
@@ -316,19 +309,11 @@ export const AiStrategyEngine: React.FC = () => {
           {/* Action Row & Compliance Disclaimer */}
           <div className="pt-3 border-t border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
             <div className="text-[11px] text-amber-300/90 leading-tight max-w-xl">
-              <strong>Mandatory SEBI Disclosure:</strong> Win probability ({activeStrategy.winProbabilityPercent}%) is mathematically estimated based on implied volatility and delta. Past statistical trends do not guarantee future performance.
+              <strong>Mandatory SEBI Disclosure:</strong> This is an illustrative strategy idea, not a recommendation. No win probability or backtest has been computed for it. We are not SEBI registered; options carry high risk of loss.
             </div>
 
             <div className="flex items-center gap-2 w-full sm:w-auto">
-              <button
-                type="button"
-                onClick={() => handleOpenBacktest()}
-                className="w-full sm:w-auto px-3.5 py-2 rounded-lg bg-indigo-950/80 hover:bg-indigo-900 border border-indigo-500/50 text-indigo-300 text-xs font-bold font-mono tracking-wider flex items-center justify-center gap-2 transition cursor-pointer"
-              >
-                <BarChart2 className="h-3.5 w-3.5 text-indigo-400" />
-                Historical Backtest
-              </button>
-
+              {/* Historical Backtest button removed: its results were random numbers, not a backtest. */}
               <button
                 onClick={handleExecuteStrategy}
                 className="w-full sm:w-auto px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold font-mono tracking-wider flex items-center justify-center gap-2 shadow-lg shadow-emerald-900/30 transition shrink-0 cursor-pointer"
