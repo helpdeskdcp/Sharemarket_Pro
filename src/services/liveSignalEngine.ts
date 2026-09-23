@@ -5,6 +5,7 @@ import { AngelOneLiveStreamer } from './angelOneLiveService';
 import { AngelCandle, getAngelCandles, getAngelQuotes, SmartApiAuth } from './angelOneApi';
 import { getInstruments, InstrumentRow, nearestExpiry, todayKeyIST } from './instrumentMaster';
 import { OPEN_TRADE_STATUSES, PriceActionStrategyEngine } from './priceActionEngine';
+import { ACTIVE_RULES, BreakoutSetup, detectBreakout } from './signalRules';
 
 // Live option signal engine: detects 5-minute breakouts on the near-month
 // future of each underlying from real Angel One candles, prices the ATM
@@ -12,7 +13,7 @@ import { OPEN_TRADE_STATUSES, PriceActionStrategyEngine } from './priceActionEng
 // until target / stop loss / square-off.
 
 type Market = 'NSE' | 'MCX';
-export type SignalEvent = 'T1' | 'T2' | 'T4' | 'SL' | 'SQUARED_OFF';
+export type SignalEvent = 'BE' | 'T1' | 'T2' | 'T4' | 'SL' | 'SQUARED_OFF';
 
 interface Underlying {
   symbol: string; // ticker/profile symbol used across the app
@@ -38,12 +39,18 @@ const UNDERLYINGS: Underlying[] = [
   { symbol: 'ZINC', angelName: 'ZINC', market: 'MCX', futExchange: 'MCX', futType: 'FUTCOM', optExchange: 'MCX', optType: 'OPTFUT' },
 ];
 
-// IST minutes-of-day windows. New signals only inside [entryStart, entryEnd];
-// open signals are closed at squareOff.
-const SESSION: Record<Market, { entryStart: number; entryEnd: number; squareOff: number }> = {
-  NSE: { entryStart: 9 * 60 + 30, entryEnd: 14 * 60 + 45, squareOff: 15 * 60 + 15 },
-  MCX: { entryStart: 9 * 60 + 15, entryEnd: 22 * 60 + 30, squareOff: 23 * 60 + 15 },
-};
+// IST minutes-of-day at which open signals are closed. New-entry windows
+// and all breakout rules live in signalRules.ts (ACTIVE_RULES).
+const SQUARE_OFF: Record<Market, number> = { NSE: 15 * 60 + 15, MCX: 23 * 60 + 15 };
+
+// Underlyings that get no new signals, e.g. SIGNAL_PAUSED_SYMBOLS="BANKNIFTY"
+// (comma-separated). Open signals are still tracked. Remove and restart to resume.
+const PAUSED_SYMBOLS = new Set(
+  (process.env.SIGNAL_PAUSED_SYMBOLS || '')
+    .split(',')
+    .map(x => x.trim().toUpperCase())
+    .filter(Boolean)
+);
 
 const CANDLE_MS = 5 * 60 * 1000;
 const EVALUATE_OFFSET_MS = 20 * 1000; // run 20s after each 5-minute close
@@ -52,8 +59,6 @@ const MIN_GAP_BETWEEN_SIGNALS_MS = 30 * 60 * 1000;
 const OPTION_DELTA = 0.5; // ATM approximation to translate underlying risk to premium
 const SL_MIN_PCT = 0.15;
 const SL_MAX_PCT = 0.35;
-const MAX_UPPER_WICK_PCT = 30;
-const MIN_BODY_PCT = 50;
 const STORE_FILE = path.join(process.cwd(), 'data', 'price-action-signals.json');
 const STORE_DAYS = 30;
 
@@ -105,6 +110,7 @@ export class LiveSignalEngine {
   public getStatus() {
     return {
       underlyings: UNDERLYINGS.map(u => u.symbol),
+      paused: [...PAUSED_SYMBOLS],
       openSignals: this.store.getOpenSignals().length,
       lastRun: this.lastRun,
       sessionActive: !!this.streamer.getSessionAuth(),
@@ -141,8 +147,12 @@ export class LiveSignalEngine {
       const instruments = await getInstruments();
 
       for (const u of UNDERLYINGS) {
-        const session = SESSION[u.market];
-        if (minutes < session.entryStart || minutes > session.entryEnd) {
+        if (PAUSED_SYMBOLS.has(u.symbol.toUpperCase())) {
+          skipped.push(`${u.symbol}: paused (SIGNAL_PAUSED_SYMBOLS)`);
+          continue;
+        }
+        const window = ACTIVE_RULES.entryWindow[u.market];
+        if (minutes < window.start || minutes > window.end) {
           skipped.push(`${u.symbol}: outside entry window`);
           continue;
         }
@@ -168,7 +178,15 @@ export class LiveSignalEngine {
     const latest = symbolSignals[0];
     if (latest && Date.now() - new Date(latest.timestamp).getTime() < MIN_GAP_BETWEEN_SIGNALS_MS) return 'last signal under 30 min ago';
 
-    const fut = nearestExpiry(instruments, { name: u.angelName, exchange: u.futExchange, instrumentType: u.futType }, todayKeyIST())[0];
+    // Index options: near-month index future. MCX options are options on
+    // futures, so watch the future the chosen option expires into (rule 5).
+    let fut: InstrumentRow | undefined;
+    if (u.market === 'MCX') {
+      const opt = nearestExpiry(instruments, { name: u.angelName, exchange: u.optExchange, instrumentType: u.optType }, todayKeyIST(), true)[0];
+      fut = opt ? nearestExpiry(instruments, { name: u.angelName, exchange: 'MCX', instrumentType: 'FUTCOM' }, opt.expiryKey)[0] : undefined;
+    } else {
+      fut = nearestExpiry(instruments, { name: u.angelName, exchange: u.futExchange, instrumentType: u.futType }, todayKeyIST())[0];
+    }
     if (!fut) return 'no future contract found';
 
     const now = Date.now();
@@ -177,74 +195,21 @@ export class LiveSignalEngine {
     if (candles.length < 30) return 'not enough candle data';
 
     const closed = candles.filter(c => c.ts + CANDLE_MS <= now);
-    const c = closed[closed.length - 1];
-    const p = closed[closed.length - 2];
-    if (!c || !p || c.dateKey !== today) return 'no closed candle today';
-    if (this.lastEvaluatedCandle.get(u.symbol) === c.ts) return 'candle already evaluated';
-    this.lastEvaluatedCandle.set(u.symbol, c.ts);
+    const latestClosed = closed[closed.length - 1];
+    if (!latestClosed || latestClosed.dateKey !== today) return 'no closed candle today';
+    if (this.lastEvaluatedCandle.get(u.symbol) === latestClosed.ts) return 'candle already evaluated';
+    this.lastEvaluatedCandle.set(u.symbol, latestClosed.ts);
 
-    const todayCandles = closed.filter(x => x.dateKey === today);
-    const prevDate = [...new Set(closed.map(x => x.dateKey))].filter(d => d < today).pop();
-    const prevCandles = closed.filter(x => x.dateKey === prevDate);
-    if (todayCandles.length < 4 || prevCandles.length === 0) return 'opening range not complete';
+    const setup = detectBreakout(closed, today, profile.breakoutVolumeThreshold, ACTIVE_RULES);
+    if (typeof setup === 'string') return setup;
 
-    const pdh = Math.max(...prevCandles.map(x => x.high));
-    const pdl = Math.min(...prevCandles.map(x => x.low));
-    const openingRange = todayCandles.slice(0, 3);
-    const orh = Math.max(...openingRange.map(x => x.high));
-    const orl = Math.min(...openingRange.map(x => x.low));
-
-    const recent = closed.slice(-14);
-    const atr = recent.reduce((sum, x) => sum + (x.high - x.low), 0) / recent.length;
-    const prior = closed.slice(-21, -1);
-    const avgVolume = prior.reduce((sum, x) => sum + x.volume, 0) / (prior.length || 1);
-    const volumeMultiplier = avgVolume > 0 ? round2(c.volume / avgVolume) : 0;
-
-    const range = c.high - c.low;
-    if (range <= 0 || atr <= 0) return 'flat candle';
-    const bodyPct = (Math.abs(c.close - c.open) / range) * 100;
-    const upperWickPct = ((c.high - Math.max(c.open, c.close)) / range) * 100;
-    const lowerWickPct = ((Math.min(c.open, c.close) - c.low) / range) * 100;
-
-    const bullLevels = ([['Opening range high', orh], ['Previous day high', pdh]] as [string, number][])
-      .filter(([, level]) => p.close <= level && c.close > level);
-    const bearLevels = ([['Opening range low', orl], ['Previous day low', pdl]] as [string, number][])
-      .filter(([, level]) => p.close >= level && c.close < level);
-
-    let bias: 'BULLISH' | 'BEARISH';
-    let levels: [string, number][];
-    if (bullLevels.length && c.close > c.open) {
-      bias = 'BULLISH';
-      levels = bullLevels;
-    } else if (bearLevels.length && c.close < c.open) {
-      bias = 'BEARISH';
-      levels = bearLevels;
-    } else {
-      return 'no level crossed';
-    }
-
-    // Strongest level crossed: highest for breakouts, lowest for breakdowns
-    const [levelName, level] = levels.sort((a, b) => (bias === 'BULLISH' ? b[1] - a[1] : a[1] - b[1]))[0];
-    const againstWickPct = bias === 'BULLISH' ? upperWickPct : lowerWickPct;
-    const extension = Math.abs(c.close - level);
-
-    if (bodyPct < MIN_BODY_PCT) return `body ${bodyPct.toFixed(0)}% < ${MIN_BODY_PCT}%`;
-    if (againstWickPct > MAX_UPPER_WICK_PCT) return `rejection wick ${againstWickPct.toFixed(0)}%`;
-    if (volumeMultiplier < profile.breakoutVolumeThreshold) return `volume ${volumeMultiplier}x < ${profile.breakoutVolumeThreshold}x`;
-    if (extension > atr) return 'close too far beyond level';
-
-    const underlyingRisk = Math.max(bias === 'BULLISH' ? c.close - c.low : c.high - c.close, 0.25 * atr);
-
-    const signal = await this.buildOptionSignal({
-      u, auth, instruments, fut, candle: c, bias, level, levelName, levels, atr, volumeMultiplier,
-      bodyPct, againstWickPct, underlyingRisk, todaysCount: todays.length,
-    });
+    const signal = await this.buildOptionSignal({ u, auth, instruments, fut, setup, todaysCount: todays.length });
     if (typeof signal === 'string') return signal;
 
     this.store.addSignal(signal);
     this.dirty = true;
     this.saveToDisk();
-    console.log(`[Signals] NEW ${signal.optionSymbol} entry ${signal.optionEntryPrice} SL ${signal.optionStopLoss} (${levelName} ${level})`);
+    console.log(`[Signals] NEW ${signal.optionSymbol} entry ${signal.optionEntryPrice} SL ${signal.optionStopLoss} (${setup.levelName} ${setup.level})`);
     this.hooks.onNewSignal(signal);
     return null;
   }
@@ -254,19 +219,11 @@ export class LiveSignalEngine {
     auth: SmartApiAuth;
     instruments: InstrumentRow[];
     fut: InstrumentRow;
-    candle: AngelCandle;
-    bias: 'BULLISH' | 'BEARISH';
-    level: number;
-    levelName: string;
-    levels: [string, number][];
-    atr: number;
-    volumeMultiplier: number;
-    bodyPct: number;
-    againstWickPct: number;
-    underlyingRisk: number;
+    setup: BreakoutSetup;
     todaysCount: number;
   }): Promise<PriceActionSignal | string> {
-    const { u, auth, instruments, fut, candle, bias, level, levelName } = ctx;
+    const { u, auth, instruments, fut, setup } = ctx;
+    const { bias, level, levelName } = setup;
     const optionType = bias === 'BULLISH' ? 'CE' : 'PE';
 
     // Nearest expiry that is not today (no expiry-day entries)
@@ -297,7 +254,7 @@ export class LiveSignalEngine {
     if (!(Number(quote?.tradeVolume) > 0)) return `${atm.symbol} has not traded today`;
 
     const tick = atm.tickSize || 0.05;
-    const rawSl = Math.min(Math.max(OPTION_DELTA * ctx.underlyingRisk, SL_MIN_PCT * entry), SL_MAX_PCT * entry);
+    const rawSl = Math.min(Math.max(OPTION_DELTA * setup.underlyingRisk, SL_MIN_PCT * entry), SL_MAX_PCT * entry);
     const slPoints = Math.max(roundToTick(rawSl, tick), tick);
     const stopLoss = round2(entry - slPoints);
     const target = (mult: number) => roundToTick(entry + mult * slPoints, tick);
@@ -305,8 +262,8 @@ export class LiveSignalEngine {
     // Rule-based setup score (not a probability): volume, candle body, and
     // how many levels the candle cleared.
     const profile = this.store.getProfile(u.symbol);
-    const volScore = Math.min(ctx.volumeMultiplier / profile.breakoutVolumeThreshold, 2) * 10;
-    const setupScore = Math.min(99, Math.round(50 + volScore + ctx.bodyPct * 0.15 + (ctx.levels.length > 1 ? 10 : 0)));
+    const volScore = Math.min(setup.volumeMultiplier / profile.breakoutVolumeThreshold, 2) * 10;
+    const setupScore = Math.min(99, Math.round(50 + volScore + setup.bodyPct * 0.15 + (setup.levels.length > 1 ? 10 : 0)));
 
     const expiryLabel = atm.expiry;
     const optionSymbol = `${u.angelName} ${expiryLabel} ${atm.strike} ${optionType}`;
@@ -356,16 +313,17 @@ export class LiveSignalEngine {
       confidenceScore: setupScore,
       daySignalNumber: ctx.todaysCount + 1,
       keyLevel: level,
-      volumeMultiplier: ctx.volumeMultiplier,
-      rejectionWickPercent: round2(ctx.againstWickPct),
+      volumeMultiplier: setup.volumeMultiplier,
+      rejectionWickPercent: round2(setup.againstWickPct),
       rationale:
-        `${fut.symbol} 5-min candle closed at ${candle.close} ${direction} ${levelName.toLowerCase()} ${level} ` +
-        `(body ${ctx.bodyPct.toFixed(0)}%, volume ${ctx.volumeMultiplier}x the 20-candle average). ` +
+        `${fut.symbol} 5-min candle closed at ${setup.breakoutCandle.close} ${direction} ${levelName.toLowerCase()} ${level} ` +
+        `(${setup.extensionAtr.toFixed(2)} ATR beyond, body ${setup.bodyPct.toFixed(0)}%, volume ${setup.volumeMultiplier}x the 20-candle average) ` +
+        `and the next candle held at ${setup.entryCandle.close}. ` +
         `ATM ${atm.strike} ${optionType} (${expiryLabel}) at live premium ₹${entry}; SL ₹${stopLoss} ` +
-        `from ~${OPTION_DELTA} delta x ${round2(ctx.underlyingRisk)} pts underlying risk.`,
+        `from ~${OPTION_DELTA} delta x ${round2(setup.underlyingRisk)} pts underlying risk.`,
       marathiRationale:
         `${u.angelName} फ्युचर्सने ${levelMr[levelName]} ${level} च्या ${bias === 'BULLISH' ? 'वर' : 'खाली'} ` +
-        `५-मिनिट कँडल क्लोज दिली (व्हॉल्यूम ${ctx.volumeMultiplier}x). ${atm.strike} ${optionType} ₹${entry} ला एंट्री, SL ₹${stopLoss}.`,
+        `५-मिनिट कँडल क्लोज दिली (व्हॉल्यूम ${setup.volumeMultiplier}x). ${atm.strike} ${optionType} ₹${entry} ला एंट्री, SL ₹${stopLoss}.`,
       source: 'LIVE_ENGINE',
       optionToken: atm.token,
       optionExchange: atm.exchange,
@@ -402,7 +360,7 @@ export class LiveSignalEngine {
         const staleDay = this.istDateOf(s.timestamp) !== dateKey;
         const ltp = ltpByToken.get(s.optionToken!) || (staleDay ? s.currentOptionPrice : 0);
         if (!(ltp > 0)) continue;
-        this.applyPrice(s, ltp, staleDay || minutes >= SESSION[market].squareOff);
+        this.applyPrice(s, ltp, staleDay || minutes >= SQUARE_OFF[market]);
       }
     } finally {
       this.tracking = false;
@@ -447,9 +405,19 @@ export class LiveSignalEngine {
     } else if (!s.target1.hit && ltp >= s.target1.price) {
       s.target1.hit = true;
       s.tradeStatus = 'TARGET_1_HIT';
-      s.optionStopLoss = entry; // trail stop to cost
+      // Trail to +1R when profit protection is on (rule 6), else to cost
+      s.optionStopLoss = ACTIVE_RULES.breakevenAtR !== null ? round2(entry + s.optionStopLossPoints) : entry;
       this.dirty = true;
       this.hooks.onSignalEvent(s, 'T1');
+    } else if (
+      ACTIVE_RULES.breakevenAtR !== null &&
+      s.optionStopLoss < entry &&
+      ltp >= entry + ACTIVE_RULES.breakevenAtR * s.optionStopLossPoints
+    ) {
+      // Rule 6: protect the trade once it is +1R in profit
+      s.optionStopLoss = entry;
+      this.dirty = true;
+      this.hooks.onSignalEvent(s, 'BE');
     }
 
     if (squareOff) {
