@@ -6,12 +6,13 @@ import { createServer as createViteServer } from 'vite';
 import dotenv from 'dotenv';
 import * as OTPAuth from 'otpauth';
 import crypto from 'crypto';
-import { generateOptionChain, generateCandleHistory, WORLD_CLASS_STRATEGIES, DEFAULT_WEBHOOK_SETTINGS, DEFAULT_ENGINE_SETTINGS } from './src/data/marketData';
+import { generateCandleHistory, WORLD_CLASS_STRATEGIES, DEFAULT_WEBHOOK_SETTINGS, DEFAULT_ENGINE_SETTINGS } from './src/data/marketData';
 import { AuditLog, DeveloperSettings, GttOrder, BacktestResult, AlertWebhookSettings, Ticker, PriceActionSignal } from './src/types/market';
 import { AngelOneLiveStreamer, EXCHANGE_SYMBOL_MAP } from './src/services/angelOneLiveService';
 import { PriceActionStrategyEngine, INITIAL_PRICE_ACTION_SIGNALS } from './src/services/priceActionEngine';
 import { getAngelCandles, AngelCandleInterval } from './src/services/angelOneApi';
 import { LiveSignalEngine, SignalEvent } from './src/services/liveSignalEngine';
+import { getLiveOptionChain, OptionChainError } from './src/services/optionChainService';
 
 dotenv.config();
 
@@ -352,11 +353,16 @@ app.get('/api/market/stream', (req: Request, res: Response) => {
 });
 
 // Option Chain Endpoint
-app.get('/api/market/option-chain', (req: Request, res: Response) => {
+app.get('/api/market/option-chain', async (req: Request, res: Response) => {
   const symbol = (req.query.symbol as string) || 'NIFTY 50';
-  const ticker = serverLiveTickers.find(t => t.symbol.toUpperCase() === symbol.toUpperCase()) || serverLiveTickers[0];
-  const optionChain = generateOptionChain(ticker.symbol, ticker.ltp);
-  res.json({ success: true, data: optionChain });
+  const expiry = (req.query.expiry as string) || undefined;
+  try {
+    const data = await getLiveOptionChain(angelOneStreamer, symbol, expiry);
+    res.json({ success: true, data });
+  } catch (err: any) {
+    const status = err instanceof OptionChainError ? err.status : 500;
+    res.status(status).json({ success: false, error: err?.message || 'Option chain unavailable' });
+  }
 });
 
 // Chart candles are cached; a failed refresh serves the last good Angel One
@@ -1901,8 +1907,11 @@ async function startServer() {
     });
   }
 
-  server.listen(PORT, '0.0.0.0', () => {
-    console.log(`ShareMarket Pro trading server with Angel One Live WebSocket running on http://0.0.0.0:${PORT}`);
+  // Local-only: the public site is served through Nginx (HTTPS) on this
+  // host; binding 0.0.0.0 exposed plain HTTP on :3000 to the internet.
+  const HOST = process.env.HOST || '127.0.0.1';
+  server.listen(PORT, HOST, () => {
+    console.log(`ShareMarket Pro trading server with Angel One Live WebSocket running on http://${HOST}:${PORT}`);
     autoLoginAngelOne('startup');
     liveSignalEngine.start();
     // Signals restored from disk were already sent before the restart.

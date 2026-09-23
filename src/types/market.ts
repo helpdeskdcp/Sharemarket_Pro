@@ -55,13 +55,14 @@ export interface OptionLegData {
   change: number;
   changePercent: number;
   oi: number;
-  oiChange: number;
+  // null = not supplied by Angel One for this contract (never estimated)
+  oiChange: number | null;
   volume: number;
-  iv: number;
-  delta: number;
-  theta: number;
-  gamma: number;
-  vega: number;
+  iv: number | null;
+  delta: number | null;
+  theta: number | null;
+  gamma: number | null;
+  vega: number | null;
   bid: number;
   ask: number;
 }

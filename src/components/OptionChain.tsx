@@ -14,6 +14,13 @@ import { useTrading } from '../context/TradingContext';
 import { fetchOptionChain } from '../services/api';
 import { OptionChainData, OptionStrike } from '../types/market';
 
+type LiveChain = OptionChainData & { referenceLabel?: string; greeksAvailable?: boolean; lotSize?: number; fetchedAt?: string };
+
+// Angel One does not supply every field for every contract (e.g. Greeks for
+// SENSEX/MCX, OI change); show '-' rather than a made-up number.
+const orDash = (v: number | null) => (v === null ? '-' : v);
+const pctOrDash = (v: number | null) => (v === null ? '-' : `${v}%`);
+
 interface OptionChainProps {
   onSelectOptionTrade: (symbol: string, strike: number, type: 'CE' | 'PE', price: number) => void;
 }
@@ -31,6 +38,8 @@ export const OptionChain: React.FC<OptionChainProps> = ({ onSelectOptionTrade })
     'NATURALGAS',
     'GOLD',
     'SILVER',
+    'COPPER',
+    'ZINC',
   ];
 
   // Preferred F&O underlying index or commodity
@@ -47,37 +56,53 @@ export const OptionChain: React.FC<OptionChainProps> = ({ onSelectOptionTrade })
     }
   }, [activeSymbol]);
 
-  const [selectedExpiry, setSelectedExpiry] = useState<string>('Current Weekly (26-SEP-2024)');
-  const [chainData, setChainData] = useState<OptionChainData | null>(null);
+  // '' = nearest expiry (the server picks it)
+  const [selectedExpiry, setSelectedExpiry] = useState<string>('');
+  const [chainData, setChainData] = useState<LiveChain | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'PRICE_OI' | 'GREEKS'>('PRICE_OI');
 
-  // Load option chain data
+  // Expiry list differs per underlying
+  useEffect(() => {
+    setSelectedExpiry('');
+  }, [selectedUnderlying]);
+
+  // Load live option chain (Angel One), refreshing every 5s
   useEffect(() => {
     let isMounted = true;
     setLoading(true);
-    fetchOptionChain(selectedUnderlying)
-      .then(data => {
-        if (isMounted) {
-          setChainData(data);
+    setChainData(null);
+    const load = () =>
+      fetchOptionChain(selectedUnderlying, selectedExpiry || undefined)
+        .then(data => {
+          if (!isMounted) return;
+          setChainData(data as LiveChain);
+          setLoadError(null);
           setLoading(false);
-        }
-      })
-      .catch(err => {
-        console.warn('Failed to load option chain:', err);
-        if (isMounted) setLoading(false);
-      });
+        })
+        .catch(err => {
+          console.warn('Failed to load option chain:', err);
+          if (!isMounted) return;
+          setLoadError(err?.message || 'Live option chain unavailable');
+          setLoading(false);
+        });
+    load();
+    const timer = setInterval(load, 5000);
 
     return () => {
       isMounted = false;
+      clearInterval(timer);
     };
   }, [selectedUnderlying, selectedExpiry]);
 
   const currentUnderlyingTicker = tickers.find(t => t.symbol.toUpperCase() === selectedUnderlying.toUpperCase());
-  const underlyingLtp = currentUnderlyingTicker ? currentUnderlyingTicker.ltp : (chainData?.underlyingPrice || 24824.50);
+  // Index chains centre on spot; MCX chains on the option's own future
+  const underlyingLtp = chainData?.underlyingPrice || currentUnderlyingTicker?.ltp || 0;
+  const referenceLabel = chainData?.referenceLabel || 'Spot';
 
   // PCR sentiment color
-  const pcr = chainData?.pcr || 1.12;
+  const pcr = chainData?.pcr || 0;
   const pcrSentiment = pcr > 1.2 ? 'Bullish' : pcr < 0.8 ? 'Bearish' : 'Neutral / Rangebound';
   const pcrColor = pcr > 1.2 ? 'text-emerald-400' : pcr < 0.8 ? 'text-rose-400' : 'text-amber-400';
 
@@ -109,7 +134,7 @@ export const OptionChain: React.FC<OptionChainProps> = ({ onSelectOptionTrade })
           </div>
 
           <div className="font-mono text-xs text-slate-300">
-            Spot: <span className="font-bold text-white">₹{underlyingLtp.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+            {referenceLabel}: <span className="font-bold text-white">{underlyingLtp ? `₹${underlyingLtp.toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : '-'}</span>
           </div>
         </div>
 
@@ -117,7 +142,7 @@ export const OptionChain: React.FC<OptionChainProps> = ({ onSelectOptionTrade })
         <div className="flex items-center gap-2 text-xs font-mono">
           <span className="text-slate-400 text-[11px] hidden sm:inline">Expiry:</span>
           <select
-            value={selectedExpiry}
+            value={selectedExpiry || chainData?.selectedExpiry || ''}
             onChange={e => setSelectedExpiry(e.target.value)}
             className="bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1 text-xs text-slate-200 focus:outline-none focus:border-cyan-500/50"
           >
@@ -125,7 +150,7 @@ export const OptionChain: React.FC<OptionChainProps> = ({ onSelectOptionTrade })
               <option key={exp} value={exp}>
                 {exp}
               </option>
-            )) || <option>Current Weekly (26-SEP-2024)</option>}
+            )) || <option value="">Loading…</option>}
           </select>
 
           <button
@@ -145,7 +170,7 @@ export const OptionChain: React.FC<OptionChainProps> = ({ onSelectOptionTrade })
       {chainData && (
         <div className="px-4 py-2 bg-[#080c16] border-b border-slate-800/60 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs font-mono">
           <div className="flex items-center justify-between sm:justify-start gap-2">
-            <span className="text-slate-400">Put-Call Ratio (PCR):</span>
+            <span className="text-slate-400" title="Computed from the OI of the strikes shown">PCR (shown strikes):</span>
             <span className={`font-bold ${pcrColor}`}>
               {chainData.pcr} ({pcrSentiment})
             </span>
@@ -167,10 +192,15 @@ export const OptionChain: React.FC<OptionChainProps> = ({ onSelectOptionTrade })
 
       {/* Options Chain Table */}
       <div className="flex-1 overflow-x-auto overflow-y-auto max-h-[440px]">
-        {loading || !chainData ? (
+        {!chainData && loadError ? (
+          <div className="flex items-center justify-center py-16 text-xs text-amber-300 font-mono gap-2 px-4 text-center">
+            <Info className="h-4 w-4 shrink-0" />
+            Live option chain unavailable: {loadError}
+          </div>
+        ) : loading || !chainData ? (
           <div className="flex items-center justify-center py-16 text-xs text-cyan-400 font-mono gap-2">
             <RefreshCw className="h-4 w-4 animate-spin" />
-            Generating real-time F&amp;O matrix...
+            Loading live option chain from Angel One...
           </div>
         ) : (
           <table className="w-full text-xs font-mono text-left border-collapse">
@@ -263,17 +293,16 @@ export const OptionChain: React.FC<OptionChainProps> = ({ onSelectOptionTrade })
                         </td>
                         <td
                           className={`py-1.5 px-2 text-right font-semibold ${
-                            strike.call.oiChange >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                            strike.call.oiChange === null ? 'text-slate-500' : strike.call.oiChange >= 0 ? 'text-emerald-400' : 'text-rose-400'
                           } ${isITMCall ? 'bg-emerald-950/20' : ''}`}
                         >
-                          {strike.call.oiChange >= 0 ? '+' : ''}
-                          {(strike.call.oiChange / 1000).toFixed(0)}k
+                          {strike.call.oiChange === null ? '-' : `${strike.call.oiChange >= 0 ? '+' : ''}${(strike.call.oiChange / 1000).toFixed(0)}k`}
                         </td>
                         <td className={`py-1.5 px-2 text-right text-slate-400 ${isITMCall ? 'bg-emerald-950/20' : ''}`}>
                           {(strike.call.volume / 1000).toFixed(0)}k
                         </td>
                         <td className={`py-1.5 px-2 text-right text-purple-300 ${isITMCall ? 'bg-emerald-950/20' : ''}`}>
-                          {strike.call.iv}%
+                          {pctOrDash(strike.call.iv)}
                         </td>
                         <td className={`py-1.5 px-3 text-right border-r border-slate-700 ${isITMCall ? 'bg-emerald-950/30' : ''}`}>
                           <button
@@ -295,16 +324,16 @@ export const OptionChain: React.FC<OptionChainProps> = ({ onSelectOptionTrade })
                     ) : (
                       <>
                         <td className={`py-1.5 px-2 text-right text-cyan-400 ${isITMCall ? 'bg-emerald-950/20' : ''}`}>
-                          +{strike.call.delta}
+                          {strike.call.delta === null ? '-' : `+${strike.call.delta}`}
                         </td>
                         <td className={`py-1.5 px-2 text-right text-rose-400 ${isITMCall ? 'bg-emerald-950/20' : ''}`}>
-                          {strike.call.theta}
+                          {orDash(strike.call.theta)}
                         </td>
                         <td className={`py-1.5 px-2 text-right text-slate-400 ${isITMCall ? 'bg-emerald-950/20' : ''}`}>
-                          {strike.call.gamma}
+                          {orDash(strike.call.gamma)}
                         </td>
                         <td className={`py-1.5 px-2 text-right text-purple-300 ${isITMCall ? 'bg-emerald-950/20' : ''}`}>
-                          {strike.call.iv}%
+                          {pctOrDash(strike.call.iv)}
                         </td>
                         <td className={`py-1.5 px-3 text-right border-r border-slate-700 font-bold text-emerald-400 ${isITMCall ? 'bg-emerald-950/30' : ''}`}>
                           ₹{strike.call.ltp.toFixed(2)}
@@ -344,18 +373,17 @@ export const OptionChain: React.FC<OptionChainProps> = ({ onSelectOptionTrade })
                           </button>
                         </td>
                         <td className={`py-1.5 px-2 text-left text-purple-300 ${isITMPut ? 'bg-rose-950/20' : ''}`}>
-                          {strike.put.iv}%
+                          {pctOrDash(strike.put.iv)}
                         </td>
                         <td className={`py-1.5 px-2 text-left text-slate-400 ${isITMPut ? 'bg-rose-950/20' : ''}`}>
                           {(strike.put.volume / 1000).toFixed(0)}k
                         </td>
                         <td
                           className={`py-1.5 px-2 text-left font-semibold ${
-                            strike.put.oiChange >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                            strike.put.oiChange === null ? 'text-slate-500' : strike.put.oiChange >= 0 ? 'text-emerald-400' : 'text-rose-400'
                           } ${isITMPut ? 'bg-rose-950/20' : ''}`}
                         >
-                          {strike.put.oiChange >= 0 ? '+' : ''}
-                          {(strike.put.oiChange / 1000).toFixed(0)}k
+                          {strike.put.oiChange === null ? '-' : `${strike.put.oiChange >= 0 ? '+' : ''}${(strike.put.oiChange / 1000).toFixed(0)}k`}
                         </td>
                         <td className={`py-1.5 px-2 text-left ${isITMPut ? 'bg-rose-950/20' : ''}`}>
                           {(strike.put.oi / 100000).toFixed(1)}L
@@ -367,16 +395,16 @@ export const OptionChain: React.FC<OptionChainProps> = ({ onSelectOptionTrade })
                           ₹{strike.put.ltp.toFixed(2)}
                         </td>
                         <td className={`py-1.5 px-2 text-left text-purple-300 ${isITMPut ? 'bg-rose-950/20' : ''}`}>
-                          {strike.put.iv}%
+                          {pctOrDash(strike.put.iv)}
                         </td>
                         <td className={`py-1.5 px-2 text-left text-cyan-400 ${isITMPut ? 'bg-rose-950/20' : ''}`}>
-                          {strike.put.delta}
+                          {orDash(strike.put.delta)}
                         </td>
                         <td className={`py-1.5 px-2 text-left text-rose-400 ${isITMPut ? 'bg-rose-950/20' : ''}`}>
-                          {strike.put.theta}
+                          {orDash(strike.put.theta)}
                         </td>
                         <td className={`py-1.5 px-2 text-left text-slate-400 ${isITMPut ? 'bg-rose-950/20' : ''}`}>
-                          {strike.put.gamma}
+                          {orDash(strike.put.gamma)}
                         </td>
                       </>
                     )}

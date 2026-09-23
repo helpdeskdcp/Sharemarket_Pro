@@ -40,19 +40,14 @@ export async function fetchMarketTickers(): Promise<Ticker[]> {
   }
 }
 
-export async function fetchOptionChain(symbol: string): Promise<OptionChainData> {
-  try {
-    const res = await fetch(`/api/market/option-chain?symbol=${encodeURIComponent(symbol)}`);
-    if (!res.ok) throw new Error(`HTTP error ${res.status}`);
-    const json = await res.json();
-    return json.data;
-  } catch (err) {
-    console.warn('Falling back to local option chain:', err);
-    const { generateOptionChain, INITIAL_TICKERS } = await import('../data/marketData');
-    const matched = INITIAL_TICKERS.find(t => t.symbol.toUpperCase() === symbol.toUpperCase());
-    const spot = matched ? matched.ltp : (symbol === 'BANKNIFTY' ? 51940 : 24824.50);
-    return generateOptionChain(symbol, spot);
-  }
+export async function fetchOptionChain(symbol: string, expiry?: string): Promise<OptionChainData> {
+  // Live from Angel One via the server; no simulated fallback.
+  const params = new URLSearchParams({ symbol });
+  if (expiry) params.set('expiry', expiry);
+  const res = await fetch(`/api/market/option-chain?${params}`);
+  const json = await res.json().catch(() => null);
+  if (!res.ok || !json?.success) throw new Error(json?.error || `HTTP error ${res.status}`);
+  return json.data;
 }
 
 export async function fetchCandleHistory(symbol: string, timeframe: string): Promise<HistoricalCandle[]> {
