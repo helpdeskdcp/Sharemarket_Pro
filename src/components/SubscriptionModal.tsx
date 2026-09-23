@@ -19,7 +19,7 @@ interface SubscriptionModalProps {
 }
 
 export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({ isOpen, onClose }) => {
-  const { subscription, upgradeSubscription } = useTrading();
+  const { subscription, upgradeSubscription, userSession } = useTrading();
 
   const [selectedPlan, setSelectedPlan] = useState<'MONTHLY' | 'ANNUAL'>('MONTHLY');
   const [processing, setProcessing] = useState(false);
@@ -35,22 +35,28 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({ isOpen, on
     setStatusNotice(null);
 
     try {
-      // 1. Create order on server
+      // 1. Create a real order on the server (throws if Razorpay isn't
+      // configured or the real Orders API call fails -- no more fake
+      // local order IDs).
       const orderData = await createSubscriptionOrder(planPrice, selectedPlan);
 
-      // 2. Check if Razorpay JS is loaded
       const Razorpay = (window as any).Razorpay;
+      if (!Razorpay || !orderData.keyId) {
+        setStatusNotice('Payment gateway is unavailable right now. Please try again shortly.');
+        setProcessing(false);
+        return;
+      }
 
-      if (Razorpay && orderData.keyId) {
-        const options = {
-          key: orderData.keyId,
-          amount: orderData.amount,
-          currency: 'INR',
-          name: 'Chanakya Pro Terminal',
-          description: `Subscription: ${selectedPlan} Pro Access`,
-          order_id: orderData.orderId,
-          handler: async function (response: any) {
-            // Verify payment
+      const options = {
+        key: orderData.keyId,
+        amount: orderData.amount,
+        currency: 'INR',
+        name: 'Chanakya Pro Terminal',
+        description: `Subscription: ${selectedPlan} Pro Access`,
+        order_id: orderData.orderId,
+        handler: async function (response: any) {
+          try {
+            // Verify payment against the server's real HMAC signature check.
             const verifyRes = await verifySubscriptionPayment({
               razorpayOrderId: response.razorpay_order_id,
               razorpayPaymentId: response.razorpay_payment_id,
@@ -62,42 +68,38 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({ isOpen, on
               upgradeSubscription(selectedPlan);
               setStatusNotice('Payment successful! Your account has been upgraded to PRO.');
               setTimeout(() => onClose(), 1500);
+            } else {
+              setStatusNotice(verifyRes.error || 'Payment verification failed. If money was deducted, contact support with your payment ID.');
             }
-          },
-          prefill: {
-            name: 'Demo Trader',
-            email: 'trader@sharemarketpro.in',
-            contact: '9999999999',
-          },
-          theme: {
-            color: '#06b6d4',
-          },
-        };
+          } catch (err: any) {
+            setStatusNotice(err?.message || 'Payment verification failed. If money was deducted, contact support with your payment ID.');
+          } finally {
+            setProcessing(false);
+          }
+        },
+        modal: {
+          ondismiss: () => setProcessing(false),
+        },
+        // Prefill with the real signed-in user's details instead of a
+        // fabricated "Demo Trader" identity -- Razorpay's checkout lets
+        // the customer edit these anyway, but they should never see
+        // someone else's fake pre-typed name/email/phone by default.
+        prefill: {
+          name: userSession?.name || '',
+          email: userSession?.email || '',
+        },
+        theme: {
+          color: '#06b6d4',
+        },
+      };
 
-        const rzp = new Razorpay(options);
-        rzp.open();
-      } else {
-        // Simulated checkout flow if test credentials
-        setTimeout(async () => {
-          await verifySubscriptionPayment({
-            razorpayOrderId: orderData.orderId,
-            razorpayPaymentId: `pay_sim_${Date.now()}`,
-            razorpaySignature: 'simulated_valid_signature',
-            plan: selectedPlan,
-          });
-
-          upgradeSubscription(selectedPlan);
-          setStatusNotice('Payment verified successfully via Razorpay Gateway! PRO Activated.');
-          setTimeout(() => onClose(), 1500);
-        }, 1000);
-      }
+      const rzp = new Razorpay(options);
+      rzp.open();
+      setProcessing(false);
     } catch (err: any) {
-      console.warn('Payment flow note:', err);
-      // Fallback upgrade for smooth testing
-      upgradeSubscription(selectedPlan);
-      setStatusNotice('Subscription activated successfully!');
-      setTimeout(() => onClose(), 1500);
-    } finally {
+      // A real failure (gateway not configured, order creation failed,
+      // etc.) -- show it instead of silently granting the subscription.
+      setStatusNotice(err?.message || 'Could not start checkout. Please try again.');
       setProcessing(false);
     }
   };

@@ -3,10 +3,10 @@ import http from 'http';
 import { WebSocketServer, WebSocket as WSClient } from 'ws';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
-import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
 import * as OTPAuth from 'otpauth';
-import { INITIAL_TICKERS, generateOptionChain, generateCandleHistory, WORLD_CLASS_STRATEGIES, INITIAL_AUDIT_LOGS, INITIAL_GTT_ORDERS, DEFAULT_WEBHOOK_SETTINGS, DEFAULT_ENGINE_SETTINGS } from './src/data/marketData';
+import crypto from 'crypto';
+import { generateOptionChain, generateCandleHistory, WORLD_CLASS_STRATEGIES, DEFAULT_WEBHOOK_SETTINGS, DEFAULT_ENGINE_SETTINGS } from './src/data/marketData';
 import { AuditLog, DeveloperSettings, GttOrder, BacktestResult, AlertWebhookSettings, Ticker } from './src/types/market';
 import { AngelOneLiveStreamer, EXCHANGE_SYMBOL_MAP } from './src/services/angelOneLiveService';
 import { PriceActionStrategyEngine } from './src/services/priceActionEngine';
@@ -15,6 +15,27 @@ dotenv.config();
 
 const app = express();
 const PORT = 3000;
+
+// Admin auth gate: every endpoint that reads/writes broker credentials,
+// payment gateway keys, or Telegram broadcast config previously had NO
+// authentication at all -- reachable and readable/writable by anyone on
+// the internet the moment this app was put behind a public domain. This
+// requires a shared secret (set ADMIN_API_TOKEN in .env) sent as the
+// X-Admin-Token header. If ADMIN_API_TOKEN is unset, these routes are
+// refused entirely (fail closed) rather than silently left open.
+function requireAdmin(req: Request, res: Response, next: () => void) {
+  const configured = process.env.ADMIN_API_TOKEN;
+  if (!configured) {
+    res.status(503).json({ success: false, error: 'ADMIN_API_TOKEN is not configured on the server' });
+    return;
+  }
+  const provided = req.header('X-Admin-Token');
+  if (provided !== configured) {
+    res.status(401).json({ success: false, error: 'Unauthorized' });
+    return;
+  }
+  next();
+}
 
 const priceActionEngine = PriceActionStrategyEngine.getInstance();
 
@@ -25,16 +46,20 @@ let devSettings: DeveloperSettings = {
   angelOne: {
     apiKey: process.env.ANGELONE_API_KEY || 'ANGEL_LIVE_SANDBOX_KEY_8829',
     clientCode: process.env.ANGELONE_CLIENT_CODE || 'DCP78912',
-    mpin: '1982',
-    totpSecret: 'JBSWY3DPEHPK3PXP',
+    mpin: process.env.ANGELONE_MPIN || '1982',
+    totpSecret: process.env.ANGELONE_TOTP_SECRET || 'JBSWY3DPEHPK3PXP',
     autoTotp: true,
     secretKey: '••••••••••••••••',
-    feedToken: 'FT_SMARTAPI_TOKEN_991823',
-    jwtToken: 'jwt_smartapi_live_init',
-    refreshToken: 'refresh_smartapi_live_init',
+    // No session exists until a real /api/broker/angelone/auth login
+    // succeeds -- previously these were fake-looking placeholder tokens
+    // with connected:true baked in, claiming a broker session that never
+    // actually happened.
+    feedToken: '',
+    jwtToken: '',
+    refreshToken: '',
     isLive: false,
-    connected: true,
-    lastConnected: new Date().toISOString(),
+    connected: false,
+    lastConnected: '',
   },
   razorpay: {
     keyId: process.env.RAZORPAY_KEY_ID || 'rzp_test_9kLmnO2P8QvXwY',
@@ -43,12 +68,29 @@ let devSettings: DeveloperSettings = {
     isLive: false,
   },
   executionMode: 'PAPER',
-  webhooks: DEFAULT_WEBHOOK_SETTINGS,
+  webhooks: {
+    ...DEFAULT_WEBHOOK_SETTINGS,
+    telegram: {
+      ...DEFAULT_WEBHOOK_SETTINGS.telegram,
+      // Same env-var-first pattern already used for angelOne/razorpay
+      // above: a real token/chat id in .env auto-enables broadcasting;
+      // otherwise this stays safely disabled (DEFAULT_WEBHOOK_SETTINGS'
+      // fail-closed defaults), never the old fake-demo-token behavior.
+      botToken: process.env.TELEGRAM_BOT_TOKEN || DEFAULT_WEBHOOK_SETTINGS.telegram.botToken,
+      chatId: process.env.TELEGRAM_CHAT_ID || DEFAULT_WEBHOOK_SETTINGS.telegram.chatId,
+      enabled: !!process.env.TELEGRAM_BOT_TOKEN,
+      isConnected: !!process.env.TELEGRAM_BOT_TOKEN,
+      autoBroadcastSignals: !!process.env.TELEGRAM_BOT_TOKEN,
+    },
+  },
   engines: DEFAULT_ENGINE_SETTINGS,
 };
 
-let auditLogs: AuditLog[] = [...INITIAL_AUDIT_LOGS];
-let gttOrders: GttOrder[] = [...INITIAL_GTT_ORDERS];
+// Start with no fabricated trading/audit history -- INITIAL_AUDIT_LOGS and
+// INITIAL_GTT_ORDERS were canned demo entries (fake past trades, fake
+// pending GTT triggers) that never actually happened on this deployment.
+let auditLogs: AuditLog[] = [];
+let gttOrders: GttOrder[] = [];
 
 // Initialize Real-time Angel One Market Streamer & Live Exchange Gateway
 const angelOneStreamer = AngelOneLiveStreamer.getInstance();
@@ -94,23 +136,158 @@ angelOneStreamer.subscribe((tickers, flashes) => {
   });
 });
 
-// Initialize Gemini Client server-side
-function getGeminiClient(): GoogleGenAI | null {
-  if (!process.env.GEMINI_API_KEY) {
+// AI Strategy Advisor now calls OpenAI directly via fetch (replacing the
+// previous @google/genai Gemini client per operator instruction) --
+// matches this file's existing style of plain fetch() calls (see the
+// Telegram/Yahoo Finance integrations below) rather than adding a new
+// SDK dependency for one endpoint.
+async function callOpenAIChatJson(prompt: string): Promise<string | null> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) return null;
+  const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      messages: [{ role: 'user', content: prompt }],
+      response_format: { type: 'json_object' },
+      temperature: 0.3,
+    }),
+  });
+
+  if (!response.ok) {
+    const bodyText = await response.text().catch(() => '');
+    throw new Error(`OpenAI API returned ${response.status}: ${bodyText.slice(0, 200)}`);
+  }
+
+  const json: any = await response.json();
+  return json?.choices?.[0]?.message?.content || null;
+}
+
+// Angel One SmartAPI: real broker login (replaces the previous simulated
+// handshake that always returned fake JWT/margin data regardless of
+// whether credentials were even valid). Same header set already proven
+// against Angel One's REST API by the quote-fetch code in
+// angelOneLiveService.ts (X-PrivateKey/X-UserType/X-SourceID/etc).
+function angelOneHeaders(apiKey: string, extra?: Record<string, string>) {
+  return {
+    'Content-Type': 'application/json',
+    'Accept': 'application/json',
+    'X-UserType': 'USER',
+    'X-SourceID': 'WEB',
+    'X-ClientLocalIP': '127.0.0.1',
+    'X-ClientPublicIP': '127.0.0.1',
+    'X-MACAddress': 'fe80::1',
+    'X-PrivateKey': apiKey,
+    ...extra,
+  };
+}
+
+interface AngelOneLoginResult {
+  ok: boolean;
+  message: string;
+  errorcode?: string;
+  jwtToken?: string;
+  refreshToken?: string;
+  feedToken?: string;
+}
+
+async function angelOneLogin(clientCode: string, mpin: string, totp: string, apiKey: string): Promise<AngelOneLoginResult> {
+  const response = await fetch('https://apiconnect.angelone.in/rest/auth/angelbroking/user/v1/loginByPassword', {
+    method: 'POST',
+    headers: angelOneHeaders(apiKey),
+    body: JSON.stringify({ clientcode: clientCode, password: mpin, totp }),
+  });
+
+  const json: any = await response.json().catch(() => null);
+  if (!response.ok || !json || json.status !== true) {
+    return {
+      ok: false,
+      message: json?.message || `Angel One login failed (HTTP ${response.status})`,
+      errorcode: json?.errorcode,
+    };
+  }
+
+  return {
+    ok: true,
+    message: json.message || 'SUCCESS',
+    jwtToken: json.data?.jwtToken,
+    refreshToken: json.data?.refreshToken,
+    feedToken: json.data?.feedToken,
+  };
+}
+
+interface AngelOneMargins {
+  availableMargin: number;
+  usedMargin: number;
+  collateralValue: number;
+}
+
+async function angelOneFetchMargins(jwtToken: string, apiKey: string): Promise<AngelOneMargins | null> {
+  try {
+    const response = await fetch('https://apiconnect.angelone.in/rest/secure/angelbroking/user/v1/getRMS', {
+      method: 'GET',
+      headers: angelOneHeaders(apiKey, { 'Authorization': `Bearer ${jwtToken}` }),
+    });
+    const json: any = await response.json().catch(() => null);
+    if (!response.ok || !json || json.status !== true || !json.data) return null;
+
+    return {
+      availableMargin: Number(json.data.availablecash ?? json.data.net ?? 0),
+      usedMargin: Number(json.data.utiliseddebits ?? 0),
+      collateralValue: Number(json.data.collateral ?? 0),
+    };
+  } catch {
     return null;
   }
+}
+
+// Razorpay: real order creation + real HMAC signature verification.
+// Previously /api/subscription/create-order fabricated a local order ID
+// without ever calling Razorpay, and /api/subscription/verify accepted
+// ANY payment_id/order_id as valid with no signature check at all --
+// combined with the frontend's "simulated checkout" fallback (which ran
+// whenever no real key was configured, i.e. always, until real Razorpay
+// keys are set), this meant every "Subscribe" click granted free PRO
+// access with zero payment collected. These fail closed instead: with no
+// real RAZORPAY_KEY_ID/SECRET configured, they refuse rather than fake success.
+function razorpayConfigured(): boolean {
+  return !!process.env.RAZORPAY_KEY_ID && !!process.env.RAZORPAY_KEY_SECRET;
+}
+
+async function createRazorpayOrder(amountPaise: number, currency: string, receipt: string): Promise<{ ok: true; id: string; amount: number; currency: string } | { ok: false; error: string }> {
+  const keyId = process.env.RAZORPAY_KEY_ID!;
+  const keySecret = process.env.RAZORPAY_KEY_SECRET!;
+  const auth = Buffer.from(`${keyId}:${keySecret}`).toString('base64');
+
+  const response = await fetch('https://api.razorpay.com/v1/orders', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Basic ${auth}`,
+    },
+    body: JSON.stringify({ amount: amountPaise, currency, receipt }),
+  });
+
+  const json: any = await response.json().catch(() => null);
+  if (!response.ok || !json?.id) {
+    return { ok: false, error: json?.error?.description || `Razorpay order creation failed (HTTP ${response.status})` };
+  }
+  return { ok: true, id: json.id, amount: json.amount, currency: json.currency };
+}
+
+function verifyRazorpaySignature(orderId: string, paymentId: string, signature: string): boolean {
+  const keySecret = process.env.RAZORPAY_KEY_SECRET!;
+  const expected = crypto.createHmac('sha256', keySecret).update(`${orderId}|${paymentId}`).digest('hex');
   try {
-    return new GoogleGenAI({
-      apiKey: process.env.GEMINI_API_KEY,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
-        },
-      },
-    });
-  } catch (err) {
-    console.error('Failed to initialize GoogleGenAI client:', err);
-    return null;
+    return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
+  } catch {
+    return false;
   }
 }
 
@@ -123,7 +300,7 @@ app.get('/api/health', (req: Request, res: Response) => {
   res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
-    geminiConfigured: !!process.env.GEMINI_API_KEY,
+    openaiConfigured: !!process.env.OPENAI_API_KEY,
     angelOneConnected: devSettings.angelOne.connected,
   });
 });
@@ -294,9 +471,7 @@ app.post('/api/ai/strategy-advisor', async (req: Request, res: Response) => {
   const price = currentPrice || 24824.50;
   const selectedRisk = riskLevel || 'BALANCED';
 
-  const gemini = getGeminiClient();
-
-  if (gemini) {
+  if (process.env.OPENAI_API_KEY) {
     try {
       const prompt = `You are a SEBI-compliant Quantitative Share Market Analyst and Derivatives Strategist.
 Evaluate the current market context:
@@ -336,20 +511,12 @@ Provide a JSON response with:
   "sebiComplianceDisclaimer": "Strict SEBI warning statement"
 }`;
 
-      const response = await gemini.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents: prompt,
-        config: {
-          responseMimeType: 'application/json',
-          temperature: 0.3,
-        }
-      });
-
-      const responseText = response.text || '';
+      const responseText = await callOpenAIChatJson(prompt);
+      if (!responseText) throw new Error('OpenAI returned no content');
       const parsedData = JSON.parse(responseText);
-      return res.json({ success: true, source: 'gemini', data: parsedData });
+      return res.json({ success: true, source: 'openai', data: parsedData });
     } catch (err) {
-      console.warn('Gemini API call failed or timed out, using quant fallback:', err);
+      console.warn('OpenAI API call failed or timed out, using quant fallback:', err);
     }
   }
 
@@ -376,7 +543,7 @@ Provide a JSON response with:
 });
 
 // Generate TOTP from Secret Key (RFC 6238 pyotp-compatible)
-app.post('/api/broker/angelone/generate-totp', (req: Request, res: Response) => {
+app.post('/api/broker/angelone/generate-totp', requireAdmin, (req: Request, res: Response) => {
   const { totpSecret } = req.body;
   const secretKey = (totpSecret || devSettings.angelOne.totpSecret || 'JBSWY3DPEHPK3PXP')
     .replace(/\s+/g, '')
@@ -539,10 +706,15 @@ app.get('/api/broker/angelone/market-data/watchlist-ltp', (req: Request, res: Re
 });
 
 // Broker Authentication (Angel One SmartAPI with MPIN & Auto-TOTP)
-app.post('/api/broker/angelone/auth', (req: Request, res: Response) => {
+// Calls Angel One's real loginByPassword endpoint -- this used to return a
+// fabricated JWT/margin response unconditionally regardless of whether the
+// credentials were valid. A failed real login now returns success:false
+// with Angel One's own error instead of pretending to connect.
+app.post('/api/broker/angelone/auth', requireAdmin, async (req: Request, res: Response) => {
   const { clientCode, mpin, password, totp, totpSecret, apiKey, autoTotp } = req.body;
 
   const targetClient = clientCode || devSettings.angelOne.clientCode;
+  const targetKey = apiKey || devSettings.angelOne.apiKey;
   const targetMpin = mpin || password || devSettings.angelOne.mpin || '1982';
   const targetSecret = (totpSecret || devSettings.angelOne.totpSecret || 'JBSWY3DPEHPK3PXP')
     .replace(/\s+/g, '')
@@ -562,72 +734,153 @@ app.post('/api/broker/angelone/auth', (req: Request, res: Response) => {
       });
       activeTotp = totpInstance.generate();
     } catch (err) {
-      activeTotp = '849201';
+      res.status(400).json({ success: false, error: 'Failed to generate TOTP from the configured secret' });
+      return;
     }
   }
 
-  const newLog: AuditLog = {
+  let loginResult: AngelOneLoginResult;
+  try {
+    loginResult = await angelOneLogin(targetClient, targetMpin, activeTotp, targetKey);
+  } catch (err: any) {
+    loginResult = { ok: false, message: err?.message || 'Angel One login request failed' };
+  }
+
+  if (!loginResult.ok) {
+    auditLogs.unshift({
+      id: `log-${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      user: targetClient,
+      action: 'BROKER_AUTH_REQUEST',
+      category: 'AUTH',
+      status: 'FAILED',
+      details: `Angel One SmartAPI login rejected. Client: ${targetClient}, Error: ${loginResult.errorcode || ''} ${loginResult.message}`,
+      ipAddress: req.ip || '127.0.0.1',
+    });
+    res.status(401).json({
+      success: false,
+      connected: false,
+      broker: 'Angel One SmartAPI',
+      error: loginResult.message,
+      errorcode: loginResult.errorcode,
+    });
+    return;
+  }
+
+  auditLogs.unshift({
     id: `log-${Date.now()}`,
     timestamp: new Date().toISOString(),
     user: targetClient,
     action: 'BROKER_AUTH_REQUEST',
     category: 'AUTH',
     status: 'SUCCESS',
-    details: `Angel One SmartAPI handshake executed. Client: ${targetClient}, MPIN: [••••], Auto-TOTP: [${activeTotp}], Protocol: RFC-6238 pyotp-compatible`,
+    details: `Angel One SmartAPI handshake executed. Client: ${targetClient}, MPIN: [••••], Auto-TOTP: [used], Protocol: RFC-6238 pyotp-compatible`,
     ipAddress: req.ip || '127.0.0.1',
-  };
-  auditLogs.unshift(newLog);
+  });
 
   devSettings.angelOne.connected = true;
+  devSettings.angelOne.isLive = true;
   devSettings.angelOne.lastConnected = new Date().toISOString();
-  if (apiKey) devSettings.angelOne.apiKey = apiKey;
-  if (clientCode) devSettings.angelOne.clientCode = clientCode;
+  devSettings.angelOne.apiKey = targetKey;
+  devSettings.angelOne.clientCode = targetClient;
   if (mpin) devSettings.angelOne.mpin = mpin;
   if (totpSecret) devSettings.angelOne.totpSecret = targetSecret;
   if (autoTotp !== undefined) devSettings.angelOne.autoTotp = autoTotp;
 
-  const sessionJwt = `jwt_ao_${Math.random().toString(36).substring(2)}_${Date.now()}`;
-  const refreshJwt = `ref_ao_${Math.random().toString(36).substring(2)}_${Date.now()}`;
-  const feedToken = `feed_ao_${Math.random().toString(36).substring(2)}`;
+  const sessionJwt = loginResult.jwtToken!;
+  const refreshJwt = loginResult.refreshToken || '';
+  const feedToken = loginResult.feedToken || '';
 
   devSettings.angelOne.jwtToken = sessionJwt;
   devSettings.angelOne.refreshToken = refreshJwt;
   devSettings.angelOne.feedToken = feedToken;
+
+  // Hand the real session's feedToken/apiKey/clientCode to the shared
+  // live streamer so its WebSocket + REST quote polling (angelOneLiveService.ts)
+  // start authenticating against Angel One for real instead of falling
+  // through to the Yahoo Finance fallback feed.
+  angelOneStreamer.updateCredentials(targetClient, targetKey, feedToken);
+
+  const margins = feedToken ? await angelOneFetchMargins(sessionJwt, targetKey) : null;
 
   res.json({
     success: true,
     connected: true,
     broker: 'Angel One SmartAPI',
     clientCode: devSettings.angelOne.clientCode,
-    activeTotp,
     totpGeneratedAt: new Date().toISOString(),
     sessionToken: sessionJwt,
     jwtToken: sessionJwt,
     refreshToken: refreshJwt,
     feedToken: feedToken,
-    availableMargin: 245800.50,
-    usedMargin: 34200.00,
-    collateralValue: 120000.00,
+    availableMargin: margins?.availableMargin ?? null,
+    usedMargin: margins?.usedMargin ?? null,
+    collateralValue: margins?.collateralValue ?? null,
+    marginsAvailable: !!margins,
     mode: devSettings.executionMode,
     message: 'Angel One SmartAPI authenticated successfully with MPIN and Auto-generated TOTP!',
   });
 });
 
 // Developer Settings Config (GET & POST)
+// This endpoint is called automatically for EVERY visitor on app load
+// (see TradingContext.tsx) to pick up executionMode/webhooks/engines
+// display config -- it can't be admin-gated outright without breaking
+// the app for ordinary users. What it must never do is hand real broker/
+// payment secrets to every visitor's browser: the raw admin.angelOne and
+// devSettings.razorpay fields (apiKey, mpin, totpSecret, secretKey,
+// feedToken, jwtToken, refreshToken, keySecret, webhookSecret) were
+// previously sent to anyone who called this, unauthenticated. A valid
+// X-Admin-Token unlocks the real values (needed so the Developer
+// Settings panel can display what's currently configured); everyone
+// else gets a redacted view with only what the live dashboard actually
+// needs (clientCode/isLive/connected, keyId, and the telegram bot token
+// masked to a boolean).
 app.get('/api/developer/config', (req: Request, res: Response) => {
+  const isAdmin = process.env.ADMIN_API_TOKEN && req.header('X-Admin-Token') === process.env.ADMIN_API_TOKEN;
+
+  if (isAdmin) {
+    res.json({
+      success: true,
+      data: {
+        angelOne: devSettings.angelOne,
+        razorpay: devSettings.razorpay,
+        executionMode: devSettings.executionMode,
+        webhooks: devSettings.webhooks,
+        engines: devSettings.engines,
+      }
+    });
+    return;
+  }
+
   res.json({
     success: true,
     data: {
-      angelOne: devSettings.angelOne,
-      razorpay: devSettings.razorpay,
+      angelOne: {
+        clientCode: devSettings.angelOne.clientCode,
+        isLive: devSettings.angelOne.isLive,
+        connected: devSettings.angelOne.connected,
+        lastConnected: devSettings.angelOne.lastConnected,
+      },
+      razorpay: {
+        keyId: devSettings.razorpay.keyId, // Razorpay's publishable key ID is meant to be client-visible
+        isLive: devSettings.razorpay.isLive,
+      },
       executionMode: devSettings.executionMode,
-      webhooks: devSettings.webhooks,
+      // Preserve the FULL webhooks shape (telegram's other display fields,
+      // and the whatsapp sub-object entirely) so nothing that reads
+      // webhookSettings.whatsapp.* elsewhere breaks for a non-admin
+      // session -- only the actual secret (botToken) is masked out.
+      webhooks: {
+        ...devSettings.webhooks,
+        telegram: { ...devSettings.webhooks?.telegram, botToken: '' },
+      },
       engines: devSettings.engines,
     }
   });
 });
 
-app.post('/api/developer/config', (req: Request, res: Response) => {
+app.post('/api/developer/config', requireAdmin, (req: Request, res: Response) => {
   const { angelOne, razorpay, executionMode, webhooks, engines } = req.body;
 
   if (angelOne) {
@@ -686,7 +939,7 @@ app.post('/api/developer/config', (req: Request, res: Response) => {
 });
 
 // Audit Logs (GET & POST)
-app.get('/api/developer/audit-logs', (req: Request, res: Response) => {
+app.get('/api/developer/audit-logs', requireAdmin, (req: Request, res: Response) => {
   res.json({
     success: true,
     total: auditLogs.length,
@@ -694,12 +947,12 @@ app.get('/api/developer/audit-logs', (req: Request, res: Response) => {
   });
 });
 
-app.post('/api/developer/audit-logs', (req: Request, res: Response) => {
+app.post('/api/developer/audit-logs', requireAdmin, (req: Request, res: Response) => {
   const { action, category, status, details, user } = req.body;
   const newLog: AuditLog = {
     id: `log-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
     timestamp: new Date().toISOString(),
-    user: user || 'demo_trader_15d',
+    user: user || devSettings.angelOne.clientCode || 'operator',
     action: action || 'USER_ACTION',
     category: category || 'TRADE',
     status: status || 'SUCCESS',
@@ -711,47 +964,85 @@ app.post('/api/developer/audit-logs', (req: Request, res: Response) => {
 });
 
 // Razorpay Subscription Order Creation
-app.post('/api/subscription/create-order', (req: Request, res: Response) => {
+app.post('/api/subscription/create-order', async (req: Request, res: Response) => {
   const { planId, amount, currency } = req.body;
-  const orderId = `order_rzp_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
 
-  const newLog: AuditLog = {
+  if (!razorpayConfigured()) {
+    res.status(503).json({ success: false, error: 'Razorpay is not configured yet. Real RAZORPAY_KEY_ID/RAZORPAY_KEY_SECRET are required before subscriptions can be sold.' });
+    return;
+  }
+
+  const amountPaise = Math.round((amount || 999) * 100);
+  const result = await createRazorpayOrder(amountPaise, currency || 'INR', `sub_${Date.now()}`);
+
+  if (!result.ok) {
+    res.status(502).json({ success: false, error: result.error });
+    return;
+  }
+
+  auditLogs.unshift({
     id: `log-${Date.now()}`,
     timestamp: new Date().toISOString(),
-    user: 'demo_user',
+    user: devSettings.angelOne.clientCode || 'operator',
     action: 'SUBSCRIPTION_ORDER_INITIATED',
     category: 'PAYMENT',
     status: 'SUCCESS',
-    details: `Razorpay checkout initiated for plan ${planId || 'PRO_MONTHLY'} (₹${amount || 999}). Order ID: ${orderId}`,
+    details: `Razorpay checkout initiated for plan ${planId || 'PRO_MONTHLY'} (₹${amount || 999}). Order ID: ${result.id}`,
     ipAddress: req.ip || '127.0.0.1',
-  };
-  auditLogs.unshift(newLog);
+  });
 
   res.json({
     success: true,
-    orderId,
-    amount: (amount || 999) * 100, // paisa
-    currency: currency || 'INR',
+    orderId: result.id,
+    amount: result.amount,
+    currency: result.currency,
     keyId: devSettings.razorpay.keyId,
     plan: planId || 'PRO_MONTHLY',
   });
 });
 
-// Razorpay Payment Verification
+// Razorpay Payment Verification -- real HMAC-SHA256 signature check
+// (order_id|payment_id signed with the key secret) instead of accepting
+// any submitted payment_id as valid.
 app.post('/api/subscription/verify', (req: Request, res: Response) => {
-  const { razorpay_payment_id, razorpay_order_id, planId } = req.body;
+  const { razorpayOrderId, razorpayPaymentId, razorpaySignature, plan } = req.body;
 
-  const newLog: AuditLog = {
+  if (!razorpayConfigured()) {
+    res.status(503).json({ success: false, error: 'Razorpay is not configured yet.' });
+    return;
+  }
+
+  if (!razorpayOrderId || !razorpayPaymentId || !razorpaySignature) {
+    res.status(400).json({ success: false, error: 'Missing payment verification fields' });
+    return;
+  }
+
+  const valid = verifyRazorpaySignature(razorpayOrderId, razorpayPaymentId, razorpaySignature);
+  if (!valid) {
+    auditLogs.unshift({
+      id: `log-${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      user: devSettings.angelOne.clientCode || 'operator',
+      action: 'SUBSCRIPTION_ACTIVATED',
+      category: 'PAYMENT',
+      status: 'FAILED',
+      details: `Razorpay signature verification FAILED. Order: ${razorpayOrderId}, Payment: ${razorpayPaymentId}. Subscription NOT activated.`,
+      ipAddress: req.ip || '127.0.0.1',
+    });
+    res.status(400).json({ success: false, error: 'Payment signature verification failed' });
+    return;
+  }
+
+  auditLogs.unshift({
     id: `log-${Date.now()}`,
     timestamp: new Date().toISOString(),
-    user: 'authenticated_subscriber',
+    user: devSettings.angelOne.clientCode || 'operator',
     action: 'SUBSCRIPTION_ACTIVATED',
     category: 'PAYMENT',
     status: 'SUCCESS',
-    details: `Payment verified successfully via Razorpay. Payment ID: ${razorpay_payment_id}. Plan upgraded to ${planId || 'PRO_MONTHLY'}. 15-day trial converted to unlimited paid tier.`,
+    details: `Payment verified via real Razorpay signature check. Payment ID: ${razorpayPaymentId}. Plan upgraded to ${plan || 'PRO_MONTHLY'}.`,
     ipAddress: req.ip || '127.0.0.1',
-  };
-  auditLogs.unshift(newLog);
+  });
 
   res.json({
     success: true,
@@ -759,10 +1050,10 @@ app.post('/api/subscription/verify', (req: Request, res: Response) => {
     subscription: {
       isTrial: false,
       trialDaysLeft: 0,
-      plan: planId || 'PRO_MONTHLY',
+      plan: plan || 'PRO_MONTHLY',
       active: true,
       expiresAt: new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString(),
-      paymentId: razorpay_payment_id,
+      paymentId: razorpayPaymentId,
     }
   });
 });
@@ -781,7 +1072,7 @@ app.get('/api/orders/gtt', (req: Request, res: Response) => {
 app.post('/api/orders/gtt', (req: Request, res: Response) => {
   const { symbol, side, product, quantity, triggerPrice, limitPrice, trailingStopLossPoints, trailingTargetPrice, brokerMode } = req.body;
   
-  const currentTicker = INITIAL_TICKERS.find(t => t.symbol.toUpperCase() === (symbol || 'NIFTY 50').toUpperCase());
+  const currentTicker = serverLiveTickers.find(t => t.symbol.toUpperCase() === (symbol || 'NIFTY 50').toUpperCase());
   const ltp = currentTicker ? currentTicker.ltp : triggerPrice || 24800;
 
   const newGtt: GttOrder = {
@@ -805,7 +1096,7 @@ app.post('/api/orders/gtt', (req: Request, res: Response) => {
   const newLog: AuditLog = {
     id: `log-${Date.now()}`,
     timestamp: new Date().toISOString(),
-    user: 'demo_trader_15d',
+    user: devSettings.angelOne.clientCode || 'operator',
     action: 'GTT_ORDER_CREATED',
     category: 'TRADE',
     status: 'SUCCESS',
@@ -832,7 +1123,7 @@ app.delete('/api/orders/gtt/:id', (req: Request, res: Response) => {
     auditLogs.unshift({
       id: `log-${Date.now()}`,
       timestamp: new Date().toISOString(),
-      user: 'demo_trader_15d',
+      user: devSettings.angelOne.clientCode || 'operator',
       action: 'GTT_ORDER_CANCELLED',
       category: 'TRADE',
       status: 'SUCCESS',
@@ -965,14 +1256,14 @@ function formatTargetWinTelegramHtml(winData: any, channelName?: string): string
 // -------------------------------------------------------------
 // Webhook & Trade Alerts Dispatch (Telegram / WhatsApp)
 // -------------------------------------------------------------
-app.get('/api/telegram/config', (req: Request, res: Response) => {
+app.get('/api/telegram/config', requireAdmin, (req: Request, res: Response) => {
   res.json({
     success: true,
     data: devSettings.webhooks?.telegram || DEFAULT_WEBHOOK_SETTINGS.telegram,
   });
 });
 
-app.post('/api/telegram/config', (req: Request, res: Response) => {
+app.post('/api/telegram/config', requireAdmin, (req: Request, res: Response) => {
   const telegramConfig = req.body;
   if (devSettings.webhooks) {
     devSettings.webhooks.telegram = {
@@ -999,6 +1290,9 @@ app.post('/api/telegram/config', (req: Request, res: Response) => {
   });
 });
 
+// Not admin-gated: triggered automatically from any visitor's dashboard
+// when a live signal fires (see TradingContext.tsx) -- never reads or
+// returns the bot token to the caller, only uses it server-side.
 app.post('/api/telegram/broadcast-signal', async (req: Request, res: Response) => {
   const { signal, customChannel, customBotToken } = req.body;
   if (!signal) {
@@ -1041,6 +1335,7 @@ app.post('/api/telegram/broadcast-signal', async (req: Request, res: Response) =
   });
 });
 
+// Not admin-gated: same reasoning as broadcast-signal above.
 app.post('/api/telegram/broadcast-target-win', async (req: Request, res: Response) => {
   const { winData, customChannel, customBotToken } = req.body;
   if (!winData) {
@@ -1083,7 +1378,7 @@ app.post('/api/telegram/broadcast-target-win', async (req: Request, res: Respons
   });
 });
 
-app.post('/api/telegram/test', async (req: Request, res: Response) => {
+app.post('/api/telegram/test', requireAdmin, async (req: Request, res: Response) => {
   const { botToken, chatId, channelName } = req.body || {};
   const token = botToken || devSettings.webhooks?.telegram?.botToken;
   const chat = chatId || devSettings.webhooks?.telegram?.chatId;
@@ -1233,7 +1528,7 @@ app.post('/api/strategy/backtest', (req: Request, res: Response) => {
   auditLogs.unshift({
     id: `log-${Date.now()}`,
     timestamp: new Date().toISOString(),
-    user: 'demo_trader_15d',
+    user: devSettings.angelOne.clientCode || 'operator',
     action: 'BACKTEST_EXECUTED',
     category: 'TRADE',
     status: 'SUCCESS',
@@ -1261,7 +1556,26 @@ app.get('/api/broker/angelone/websocket-status', (req: Request, res: Response) =
   });
 });
 
-app.post('/api/broker/angelone/connect-websocket', (req: Request, res: Response) => {
+// angelOneStreamer is a single shared instance (AngelOneLiveStreamer.
+// getInstance()) broadcasting to every connected visitor -- reconnecting
+// using the server's OWN stored credentials is a normal, harmless action
+// any visitor's client already triggers automatically (see
+// TradingContext.tsx's reconnectLiveStream), so that path stays open.
+// Only overriding WHICH credentials the shared feed connects with is
+// admin-gated -- letting any visitor redirect the shared broker
+// connection to a different account would be a real hijack risk.
+app.post('/api/broker/angelone/connect-websocket', (req: Request, res: Response, next: () => void) => {
+  const { clientCode, apiKey, feedToken } = req.body || {};
+  const isOverride =
+    (clientCode && clientCode !== devSettings.angelOne.clientCode) ||
+    (apiKey && apiKey !== devSettings.angelOne.apiKey) ||
+    (feedToken && feedToken !== devSettings.angelOne.feedToken);
+  if (isOverride) {
+    requireAdmin(req, res, next);
+  } else {
+    next();
+  }
+}, (req: Request, res: Response) => {
   const { clientCode, apiKey, feedToken } = req.body || {};
   const targetClient = clientCode || devSettings.angelOne.clientCode;
   const targetKey = apiKey || devSettings.angelOne.apiKey;

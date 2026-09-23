@@ -18,7 +18,7 @@ import {
   UserSession,
   UserRole,
 } from '../types/market';
-import { INITIAL_TICKERS, INITIAL_AUDIT_LOGS, WORLD_CLASS_STRATEGIES, INITIAL_GTT_ORDERS, DEFAULT_WEBHOOK_SETTINGS } from '../data/marketData';
+import { INITIAL_TICKERS, WORLD_CLASS_STRATEGIES, DEFAULT_WEBHOOK_SETTINGS } from '../data/marketData';
 import { playAlertPing } from '../utils/audioAlert';
 import { logAuditEvent, fetchDeveloperSettings, fetchMarketTickers, fetchGttOrders, createGttOrder as apiCreateGtt, cancelGttOrder as apiCancelGtt, testWebhookAlert, broadcastPriceActionToTelegram } from '../services/api';
 import {
@@ -169,153 +169,19 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [cashBalance, setCashBalance] = useState<number>(245800.50);
   const [usedMargin, setUsedMargin] = useState<number>(34200.00);
 
-  const [holdings, setHoldings] = useState<Holding[]>([
-    {
-      symbol: 'RELIANCE',
-      name: 'Reliance Industries Ltd',
-      quantity: 50,
-      avgCost: 2840.00,
-      ltp: 2985.40,
-      curVal: 149270.00,
-      totalPnl: 7270.00,
-      totalPnlPercent: 5.12,
-      dayPnl: 1425.00,
-    },
-    {
-      symbol: 'HDFCBANK',
-      name: 'HDFC Bank Ltd',
-      quantity: 100,
-      avgCost: 1580.00,
-      ltp: 1648.70,
-      curVal: 164870.00,
-      totalPnl: 6870.00,
-      totalPnlPercent: 4.35,
-      dayPnl: 1420.00,
-    },
-    {
-      symbol: 'TATAMOTORS',
-      name: 'Tata Motors Ltd',
-      quantity: 150,
-      avgCost: 910.00,
-      ltp: 982.50,
-      curVal: 147375.00,
-      totalPnl: 10875.00,
-      totalPnlPercent: 7.96,
-      dayPnl: 3360.00,
-    }
-  ]);
+  // Holdings/positions/orders/alerts start empty -- these used to be
+  // fabricated demo entries (including orders/positions falsely tagged
+  // brokerMode: 'ANGELONE', implying real broker trades that never
+  // happened). A real deployment must not show trade history that didn't
+  // actually occur.
+  const [holdings, setHoldings] = useState<Holding[]>([]);
 
-  const [positions, setPositions] = useState<Position[]>([
-    {
-      id: 'pos-1',
-      symbol: 'NIFTY 50',
-      side: 'BUY',
-      product: 'MIS',
-      quantity: 50,
-      avgPrice: 24780.00,
-      currentPrice: 24824.50,
-      pnl: 2225.00,
-      pnlPercent: 0.18,
-      instrumentType: 'INDEX',
-    },
-    {
-      id: 'pos-2',
-      symbol: 'INFY',
-      side: 'BUY',
-      product: 'MIS',
-      quantity: 100,
-      avgPrice: 1832.00,
-      currentPrice: 1845.20,
-      pnl: 1320.00,
-      pnlPercent: 0.72,
-      instrumentType: 'EQUITY',
-    },
-    {
-      id: 'pos-3',
-      symbol: 'CRUDEOIL',
-      side: 'BUY',
-      product: 'NRML',
-      quantity: 100,
-      avgPrice: 6120.00,
-      currentPrice: 6145.00,
-      pnl: 2500.00,
-      pnlPercent: 0.41,
-      instrumentType: 'COMMODITY',
-    }
-  ]);
+  const [positions, setPositions] = useState<Position[]>([]);
 
-  const [orders, setOrders] = useState<Order[]>([
-    {
-      id: 'ord-8812',
-      symbol: 'NIFTY 50',
-      side: 'BUY',
-      type: 'MARKET',
-      product: 'MIS',
-      quantity: 50,
-      price: 24780.00,
-      executedPrice: 24780.00,
-      status: 'EXECUTED',
-      timestamp: new Date(Date.now() - 3600000).toLocaleTimeString(),
-      brokerMode: 'ANGELONE',
-    },
-    {
-      id: 'ord-8813',
-      symbol: 'INFY',
-      side: 'BUY',
-      type: 'LIMIT',
-      product: 'MIS',
-      quantity: 100,
-      price: 1832.00,
-      executedPrice: 1832.00,
-      status: 'EXECUTED',
-      timestamp: new Date(Date.now() - 1800000).toLocaleTimeString(),
-      brokerMode: 'ANGELONE',
-    },
-    {
-      id: 'ord-8814',
-      symbol: 'CRUDEOIL',
-      side: 'BUY',
-      type: 'MARKET',
-      product: 'NRML',
-      quantity: 100,
-      price: 6120.00,
-      executedPrice: 6120.00,
-      status: 'EXECUTED',
-      timestamp: new Date(Date.now() - 900000).toLocaleTimeString(),
-      brokerMode: 'ANGELONE',
-    }
-  ]);
+  const [orders, setOrders] = useState<Order[]>([]);
 
   // Alerts & Notifications
-  const [alerts, setAlerts] = useState<PriceAlert[]>([
-    {
-      id: 'alt-1',
-      symbol: 'NIFTY 50',
-      targetPrice: 24900.00,
-      condition: 'GTE',
-      note: 'All-time high resistance breakout test',
-      createdAt: new Date().toLocaleTimeString(),
-      triggered: false,
-    },
-    {
-      id: 'alt-2',
-      symbol: 'RELIANCE',
-      targetPrice: 3000.00,
-      condition: 'GTE',
-      note: 'Major psychological barrier crossing',
-      createdAt: new Date().toLocaleTimeString(),
-      triggered: false,
-    },
-    {
-      id: 'alt-3',
-      symbol: 'NATURALGAS',
-      targetPrice: 240.00,
-      condition: 'GTE',
-      note: 'Key inventory breakout resistance level test',
-      createdAt: new Date().toLocaleTimeString(),
-      triggered: false,
-    }
-  ]);
+  const [alerts, setAlerts] = useState<PriceAlert[]>([]);
 
   const [notifications, setNotifications] = useState<NotificationItem[]>([
     {
@@ -326,24 +192,19 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
       type: 'SYSTEM',
       read: false,
     },
-    {
-      id: 'notif-2',
-      title: 'Angel One SmartAPI Ready',
-      message: 'Connected to broker gateway with low-latency feed token.',
-      timestamp: '5m ago',
-      type: 'SYSTEM',
-      read: false,
-    }
   ]);
 
   const [soundEnabled, setSoundEnabled] = useState<boolean>(true);
 
   // GTT Orders & Webhook Settings
-  const [gttOrders, setGttOrders] = useState<GttOrder[]>(INITIAL_GTT_ORDERS);
+  const [gttOrders, setGttOrders] = useState<GttOrder[]>([]);
   const [webhookSettings, setWebhookSettings] = useState<AlertWebhookSettings>(DEFAULT_WEBHOOK_SETTINGS);
 
   // Broker & Developer
-  const [brokerConnected, setBrokerConnected] = useState<boolean>(true);
+  // Not connected until a real Angel One login succeeds via BrokerAuthModal
+  // -- previously this defaulted to true, showing "SmartAPI: Connected"
+  // before any real broker session existed.
+  const [brokerConnected, setBrokerConnected] = useState<boolean>(false);
   const [brokerName] = useState<string>('Angel One SmartAPI');
   const [brokerMode, setBrokerMode] = useState<ExecutionMode>('PAPER'); // Default: Paper Trading
   const [simulationEnabled, setSimulationEnabled] = useState<boolean>(true); // Active real-time live data ticks enabled by default
@@ -1052,7 +913,8 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
   }, [brokerMode, soundEnabled]);
 
   const cancelGttOrder = useCallback(async (id: string) => {
-    await apiCancelGtt(id);
+    const deleted = await apiCancelGtt(id);
+    if (!deleted) return; // Don't remove it from the list if the server never actually cancelled it
     setGttOrders(prev => prev.filter(g => g.id !== id));
     setNotifications(prev => [
       {

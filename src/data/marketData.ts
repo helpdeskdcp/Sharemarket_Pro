@@ -1312,13 +1312,20 @@ export const INITIAL_GTT_ORDERS = [
 ];
 
 export const DEFAULT_WEBHOOK_SETTINGS = {
+  // Fail-closed by default: the previous default here was a fake demo
+  // bot token with enabled/autoBroadcastSignals both true, which made the
+  // server attempt (and fail) a real Telegram API call on every trading
+  // signal out of the box -- see the "Telegram API rejected message:
+  // Unauthorized" errors in server.log. Configure a real bot token via
+  // the (now admin-token-protected) Developer Settings panel, then
+  // enable broadcasting there.
   telegram: {
-    enabled: true,
-    botToken: '6891238491:AAH8kqZ_DemoTelegramBotToken_TradingPro',
+    enabled: false,
+    botToken: '',
     chatId: '@chanakya_signals',
     channelName: 'Chanakya Pro VIP Broadcast',
-    isConnected: true,
-    autoBroadcastSignals: true,
+    isConnected: false,
+    autoBroadcastSignals: false,
     broadcastBreakouts: true,
     broadcastReversals: true,
     broadcastTargetUpdates: true,

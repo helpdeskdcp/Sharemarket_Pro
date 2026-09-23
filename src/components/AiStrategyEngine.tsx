@@ -71,7 +71,7 @@ export const AiStrategyEngine: React.FC = () => {
     setActiveStrategy(matched);
   };
 
-  // Call server-side Gemini AI for Live Market Regime Analysis
+  // Call server-side OpenAI for Live Market Regime Analysis
   const runLiveAiAnalysis = async () => {
     setIsAnalyzing(true);
     setExecutionNotice(null);
@@ -171,7 +171,7 @@ export const AiStrategyEngine: React.FC = () => {
           ) : (
             <>
               <Sparkles className="h-3.5 w-3.5 text-cyan-200" />
-              Live AI Regime Scan (Gemini 3.8)
+              Live AI Regime Scan (OpenAI)
             </>
           )}
         </button>

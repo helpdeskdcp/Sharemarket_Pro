@@ -1,5 +1,32 @@
 import { Ticker, OptionChainData, HistoricalCandle, AuditLog, DeveloperSettings, SubscriptionStatus, GttOrder, BacktestResult, AlertWebhookSettings } from '../types/market';
 
+// Admin-only endpoints (Developer Settings, Telegram config, broker auth)
+// now require this header server-side -- see server.ts's requireAdmin
+// middleware. The operator enters their ADMIN_API_TOKEN once in the
+// Developer Settings modal; it's stored locally and attached here.
+const ADMIN_TOKEN_STORAGE_KEY = 'sharemarket_admin_token';
+
+export function getAdminToken(): string {
+  try {
+    return localStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
+export function setAdminToken(token: string): void {
+  try {
+    localStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token);
+  } catch {
+    // ignore (e.g. private browsing with storage disabled)
+  }
+}
+
+function adminHeaders(): Record<string, string> {
+  const token = getAdminToken();
+  return token ? { 'X-Admin-Token': token } : {};
+}
+
 export async function fetchMarketTickers(): Promise<Ticker[]> {
   try {
     const res = await fetch('/api/market/tickers');
@@ -75,7 +102,7 @@ export async function generateServerTotp(totpSecret?: string): Promise<{
   try {
     const res = await fetch('/api/broker/angelone/generate-totp', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...adminHeaders() },
       body: JSON.stringify({ totpSecret }),
     });
     if (!res.ok) throw new Error(`HTTP error ${res.status}`);
@@ -99,15 +126,20 @@ export async function authenticateBroker(credentials: {
 }): Promise<any> {
   const res = await fetch('/api/broker/angelone/auth', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...adminHeaders() },
     body: JSON.stringify(credentials),
   });
-  if (!res.ok) throw new Error(`HTTP error ${res.status}`);
-  return res.json();
+  // A rejected login (401) still carries a real, meaningful JSON body
+  // (Angel One's own error message) -- return it instead of throwing, so
+  // the caller can show the real reason instead of falling back to a
+  // "pretend it worked" path meant only for genuine network failures.
+  const json = await res.json().catch(() => null);
+  if (!json) throw new Error(`HTTP error ${res.status}`);
+  return json;
 }
 
 export async function fetchDeveloperSettings(): Promise<DeveloperSettings> {
-  const res = await fetch('/api/developer/config');
+  const res = await fetch('/api/developer/config', { headers: { ...adminHeaders() } });
   if (!res.ok) throw new Error(`HTTP error ${res.status}`);
   const json = await res.json();
   return json.data;
@@ -116,7 +148,7 @@ export async function fetchDeveloperSettings(): Promise<DeveloperSettings> {
 export async function saveDeveloperSettings(settings: Partial<DeveloperSettings>): Promise<any> {
   const res = await fetch('/api/developer/config', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...adminHeaders() },
     body: JSON.stringify(settings),
   });
   if (!res.ok) throw new Error(`HTTP error ${res.status}`);
@@ -134,8 +166,7 @@ export async function fetchAuditLogs(): Promise<AuditLog[]> {
     return json.data;
   } catch (err) {
     console.warn('Failed to fetch audit logs:', err);
-    const { INITIAL_AUDIT_LOGS } = await import('../data/marketData');
-    return INITIAL_AUDIT_LOGS;
+    return [];
   }
 }
 
@@ -160,47 +191,36 @@ export async function logAuditEvent(entry: {
 export async function createSubscriptionOrder(amountOrPlan: any, planOrAmount?: any): Promise<any> {
   const amount = typeof amountOrPlan === 'number' ? amountOrPlan : planOrAmount || 999;
   const planId = typeof amountOrPlan === 'string' ? amountOrPlan : planOrAmount || 'MONTHLY';
-  
-  try {
-    const res = await fetch('/api/subscription/create-order', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ planId, amount }),
-    });
-    if (!res.ok) throw new Error(`HTTP error ${res.status}`);
-    return await res.json();
-  } catch (err) {
-    return {
-      orderId: `order_rzp_${Date.now()}`,
-      amount: amount * 100,
-      currency: 'INR',
-      keyId: 'rzp_live_gateway_init',
-    };
+
+  const res = await fetch('/api/subscription/create-order', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ planId, amount }),
+  });
+  const json = await res.json().catch(() => null);
+  // A real failure here must not be papered over with a fabricated order
+  // (a fake orderId/keyId previously let checkout "succeed" with no real
+  // payment ever collected).
+  if (!res.ok || !json?.success) {
+    throw new Error(json?.error || `Payment gateway request failed (HTTP ${res.status})`);
   }
+  return json;
 }
 
-export async function verifySubscriptionPayment(payload: any): Promise<{ success: boolean; subscription: SubscriptionStatus }> {
-  try {
-    const res = await fetch('/api/subscription/verify', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) throw new Error(`HTTP error ${res.status}`);
-    return await res.json();
-  } catch (err) {
-    return {
-      success: true,
-      subscription: {
-        isTrial: false,
-        trialDaysLeft: 0,
-        trialExpiryDate: '2025-09-13',
-        plan: payload.plan === 'ANNUAL' ? 'INSTITUTIONAL_ANNUAL' : 'PRO_MONTHLY',
-        active: true,
-        expiresAt: '2025-09-13',
-      },
-    };
+export async function verifySubscriptionPayment(payload: any): Promise<{ success: boolean; error?: string; subscription?: SubscriptionStatus }> {
+  const res = await fetch('/api/subscription/verify', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const json = await res.json().catch(() => null);
+  // Previously any network/parse error here silently returned
+  // success:true, granting a free PRO upgrade with no real payment
+  // verified. A failed or unreachable verification must fail closed.
+  if (!json) {
+    return { success: false, error: `Verification request failed (HTTP ${res.status})` };
   }
+  return json;
 }
 
 // -------------------------------------------------------------
@@ -213,40 +233,23 @@ export async function fetchGttOrders(): Promise<GttOrder[]> {
     const json = await res.json();
     return json.data || [];
   } catch (err) {
-    console.warn('Falling back to initial GTT orders:', err);
-    const { INITIAL_GTT_ORDERS } = await import('../data/marketData');
-    return INITIAL_GTT_ORDERS;
+    console.warn('Failed to fetch GTT orders:', err);
+    return [];
   }
 }
 
 export async function createGttOrder(order: Partial<GttOrder>): Promise<GttOrder> {
-  try {
-    const res = await fetch('/api/orders/gtt', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(order),
-    });
-    if (!res.ok) throw new Error(`HTTP error ${res.status}`);
-    const json = await res.json();
-    return json.data;
-  } catch (err) {
-    console.warn('Fallback creating local GTT order:', err);
-    return {
-      id: `gtt-${Date.now()}`,
-      symbol: order.symbol || 'NIFTY 50',
-      side: order.side || 'BUY',
-      product: order.product || 'NRML',
-      quantity: order.quantity || 25,
-      triggerPrice: order.triggerPrice || 24800,
-      limitPrice: order.limitPrice || 24800,
-      trailingStopLossPoints: order.trailingStopLossPoints,
-      trailingTargetPrice: order.trailingTargetPrice,
-      highestLtpSeen: order.triggerPrice || 24800,
-      status: 'ACTIVE',
-      createdAt: new Date().toLocaleDateString(),
-      brokerMode: order.brokerMode || 'PAPER',
-    };
-  }
+  const res = await fetch('/api/orders/gtt', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(order),
+  });
+  // A GTT order that failed to save server-side must not be shown to the
+  // user as created (the previous fallback fabricated a client-only order
+  // object that was never actually persisted).
+  if (!res.ok) throw new Error(`Failed to create GTT order (HTTP ${res.status})`);
+  const json = await res.json();
+  return json.data;
 }
 
 export async function cancelGttOrder(id: string): Promise<boolean> {
@@ -257,7 +260,7 @@ export async function cancelGttOrder(id: string): Promise<boolean> {
     return res.ok;
   } catch (err) {
     console.warn('Failed to delete GTT order:', err);
-    return true;
+    return false;
   }
 }
 

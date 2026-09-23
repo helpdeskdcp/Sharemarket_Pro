@@ -27,7 +27,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { useTrading } from '../context/TradingContext';
-import { fetchDeveloperSettings, updateDeveloperSettings, fetchAuditLogs, testTelegramBroadcast } from '../services/api';
+import { fetchDeveloperSettings, updateDeveloperSettings, fetchAuditLogs, testTelegramBroadcast, getAdminToken, setAdminToken } from '../services/api';
 import { DeveloperSettings, AuditLog, EngineModelSettings } from '../types/market';
 import { DEFAULT_ENGINE_SETTINGS } from '../data/marketData';
 
@@ -60,19 +60,29 @@ export const DeveloperSettingsModal: React.FC<DeveloperSettingsModalProps> = ({
     dummyPayload: string;
     timestamp: string;
   } | null>(null);
+  const [adminTokenInput, setAdminTokenInput] = useState(() => getAdminToken());
+
+  const reloadDeveloperConfig = () => {
+    fetchDeveloperSettings().then(data => {
+      setSettings({
+        ...data,
+        engines: data.engines || DEFAULT_ENGINE_SETTINGS,
+      });
+    });
+    fetchAuditLogs().then(data => setLogs(data));
+  };
 
   // Load developer config & logs on modal open
   useEffect(() => {
     if (isOpen) {
-      fetchDeveloperSettings().then(data => {
-        setSettings({
-          ...data,
-          engines: data.engines || DEFAULT_ENGINE_SETTINGS,
-        });
-      });
-      fetchAuditLogs().then(data => setLogs(data));
+      reloadDeveloperConfig();
     }
   }, [isOpen]);
+
+  const handleSaveAdminToken = () => {
+    setAdminToken(adminTokenInput.trim());
+    reloadDeveloperConfig();
+  };
 
   const handleTestTelegramConnection = async () => {
     setTestingChannel('telegram');
@@ -460,6 +470,35 @@ export const DeveloperSettingsModal: React.FC<DeveloperSettingsModalProps> = ({
         {/* Tab 1: API Configuration */}
         {activeTab === 'API_CONFIG' && settings && (
           <form onSubmit={handleSaveSettings} className="p-5 overflow-y-auto space-y-4 font-mono text-xs">
+            {/* Admin Access Token -- required to read/write real broker & payment
+                credentials below. Without a matching ADMIN_API_TOKEN on the
+                server, these fields display a redacted view and saves fail
+                with 401. */}
+            <div className="p-3.5 rounded-xl bg-[#090d16] border border-amber-500/40 space-y-2">
+              <label className="text-[11px] text-amber-300 font-bold uppercase block">
+                Admin Access Token
+              </label>
+              <p className="text-[10px] text-slate-400">
+                Required to view/edit real credentials below. Matches ADMIN_API_TOKEN in the server's .env.
+              </p>
+              <div className="flex gap-2">
+                <input
+                  type="password"
+                  value={adminTokenInput}
+                  onChange={(e) => setAdminTokenInput(e.target.value)}
+                  placeholder="Paste ADMIN_API_TOKEN"
+                  className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-200"
+                />
+                <button
+                  type="button"
+                  onClick={handleSaveAdminToken}
+                  className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white font-bold"
+                >
+                  Unlock
+                </button>
+              </div>
+            </div>
+
             {/* Broker Execution Mode */}
             <div className="p-3.5 rounded-xl bg-[#090d16] border border-slate-800">
               <label className="text-[11px] text-slate-300 font-bold uppercase block mb-1.5">
