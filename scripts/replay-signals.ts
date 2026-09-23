@@ -12,12 +12,10 @@ import * as OTPAuth from 'otpauth';
 import { AngelCandle, getAngelCandles, smartApiHeaders, SMARTAPI_BASE } from '../src/services/angelOneApi';
 import { getInstruments, InstrumentRow, nearestExpiry, todayKeyIST } from '../src/services/instrumentMaster';
 import { DEFAULT_INDEX_PROFILES } from '../src/services/priceActionEngine';
-import { detectBreakout, istMinutesOf, RuleSet, RULES_V1, RULES_V2, SignalMarket } from '../src/services/signalRules';
+import { RuleSet, RULES_V1, RULES_V2, SignalMarket } from '../src/services/signalRules';
+import { CANDLE_MS, replayCandles, Trade } from './backtest-lib';
 
 const DAYS = Number(process.argv[2]) || 30;
-const CANDLE_MS = 5 * 60 * 1000;
-const SQUARE_OFF: Record<SignalMarket, number> = { NSE: 15 * 60 + 15, MCX: 23 * 60 + 15 };
-const DAILY_GAP_MS = 30 * 60 * 1000;
 
 const UNDERLYINGS: { symbol: string; angelName: string; market: SignalMarket; futExchange: string; futType: string; optExchange: string; optType: string }[] = [
   { symbol: 'NIFTY 50', angelName: 'NIFTY', market: 'NSE', futExchange: 'NFO', futType: 'FUTIDX', optExchange: 'NFO', optType: 'OPTIDX' },
@@ -32,77 +30,6 @@ const UNDERLYINGS: { symbol: string; angelName: string; market: SignalMarket; fu
   { symbol: 'COPPER', angelName: 'COPPER', market: 'MCX', futExchange: 'MCX', futType: 'FUTCOM', optExchange: 'MCX', optType: 'OPTFUT' },
   { symbol: 'ZINC', angelName: 'ZINC', market: 'MCX', futExchange: 'MCX', futType: 'FUTCOM', optExchange: 'MCX', optType: 'OPTFUT' },
 ];
-
-interface Trade {
-  symbol: string;
-  market: SignalMarket;
-  date: string;
-  time: string;
-  bias: string;
-  levelName: string;
-  resultR: number;
-  exit: string;
-}
-
-const hhmm = (ms: number) => new Date(ms).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Kolkata' });
-
-// Walks the underlying after entry with the live engine's stop/target logic.
-function simulate(after: AngelCandle[], entry: number, risk: number, bullish: boolean, rules: RuleSet, market: SignalMarket): { r: number; exit: string } {
-  const dir = bullish ? 1 : -1;
-  const at = (mult: number) => entry + dir * mult * risk;
-  let stop = at(-1);
-  let t1 = false, t2 = false;
-  const moveR = (price: number) => (dir * (price - entry)) / risk;
-
-  for (const c of after) {
-    const worst = bullish ? c.low : c.high;
-    const best = bullish ? c.high : c.low;
-    // Conservative: when a candle touches both, assume the stop came first
-    if (dir * (worst - stop) <= 0) return { r: moveR(stop), exit: t1 ? 'trailing stop' : moveR(stop) >= 0 ? 'stop at cost' : 'stop loss' };
-    if (dir * (best - at(4)) >= 0) return { r: 4, exit: 'target 4' };
-    if (!t2 && dir * (best - at(3)) >= 0) { t1 = t2 = true; stop = at(2); }
-    else if (!t1 && dir * (best - at(2)) >= 0) { t1 = true; stop = at(rules.breakevenAtR !== null ? 1 : 0); }
-    else if (rules.breakevenAtR !== null && dir * (best - at(rules.breakevenAtR)) >= 0 && dir * (stop - entry) < 0) stop = entry;
-    if (istMinutesOf(c.ts + CANDLE_MS) >= SQUARE_OFF[market]) return { r: moveR(c.close), exit: 'square-off' };
-  }
-  const last = after[after.length - 1];
-  return { r: last ? moveR(last.close) : 0, exit: 'data end' };
-}
-
-function replay(u: typeof UNDERLYINGS[number], candles: AngelCandle[], rules: RuleSet): Trade[] {
-  const profile = DEFAULT_INDEX_PROFILES[u.symbol] || DEFAULT_INDEX_PROFILES['NIFTY 50'];
-  const trades: Trade[] = [];
-  let openUntil = 0;
-  let lastSignalAt = 0;
-  const perDay: Record<string, number> = {};
-  const firstReplayDay = candles.length ? candles[Math.min(candles.length - 1, 150)].dateKey : '';
-
-  for (let i = 30; i < candles.length; i++) {
-    const c = candles[i];
-    if (c.dateKey < firstReplayDay) continue;
-    const closeAt = c.ts + CANDLE_MS;
-    const minutes = istMinutesOf(closeAt);
-    const win = rules.entryWindow[u.market];
-    if (minutes < win.start || minutes > win.end) continue;
-    if (closeAt < openUntil || closeAt - lastSignalAt < DAILY_GAP_MS) continue;
-    if ((perDay[c.dateKey] || 0) >= profile.dailySignalLimit) continue;
-
-    const setup = detectBreakout(candles.slice(0, i + 1), c.dateKey, profile.breakoutVolumeThreshold, rules);
-    if (typeof setup === 'string') continue;
-
-    const after = candles.slice(i + 1).filter(x => x.dateKey === c.dateKey);
-    const outcome = simulate(after, setup.entryCandle.close, setup.underlyingRisk, setup.bias === 'BULLISH', rules, u.market);
-    const exitIndex = after.findIndex(x => istMinutesOf(x.ts + CANDLE_MS) >= SQUARE_OFF[u.market]);
-    openUntil = exitIndex >= 0 ? after[exitIndex].ts + CANDLE_MS : closeAt + 60 * 60 * 1000;
-    lastSignalAt = closeAt;
-    perDay[c.dateKey] = (perDay[c.dateKey] || 0) + 1;
-    trades.push({
-      symbol: u.symbol, market: u.market, date: c.dateKey, time: hhmm(closeAt), bias: setup.bias,
-      levelName: setup.levelName, resultR: Number(outcome.r.toFixed(2)), exit: outcome.exit,
-    });
-  }
-  return trades;
-}
 
 function summary(label: string, trades: Trade[], days: number) {
   const wins = trades.filter(t => t.resultR > 0);
@@ -154,7 +81,12 @@ for (const rules of [RULES_V1, RULES_V2]) {
       volumeRows.push(`${u.symbol.padEnd(11)} ${fut.symbol.padEnd(24)} median 5-min volume ${vols[Math.floor(vols.length / 2)]}`);
       tradingDays = Math.max(tradingDays, new Set(candles.map(c => c.dateKey)).size);
     }
-    all[rules.name].push(...replay(u, candles, rules));
+    const profile = DEFAULT_INDEX_PROFILES[u.symbol] || DEFAULT_INDEX_PROFILES['NIFTY 50'];
+    all[rules.name].push(...replayCandles(u.symbol, u.market, candles, rules, {
+      dailyLimit: profile.dailySignalLimit,
+      volumeThreshold: profile.breakoutVolumeThreshold,
+      warmupCandles: 150,
+    }));
   }
 }
 
