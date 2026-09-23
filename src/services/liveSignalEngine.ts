@@ -43,6 +43,15 @@ const UNDERLYINGS: Underlying[] = [
 // and all breakout rules live in signalRules.ts (ACTIVE_RULES).
 const SQUARE_OFF: Record<Market, number> = { NSE: 15 * 60 + 15, MCX: 23 * 60 + 15 };
 
+// Underlyings that get no new signals, e.g. SIGNAL_PAUSED_SYMBOLS="BANKNIFTY"
+// (comma-separated). Open signals are still tracked. Remove and restart to resume.
+const PAUSED_SYMBOLS = new Set(
+  (process.env.SIGNAL_PAUSED_SYMBOLS || '')
+    .split(',')
+    .map(x => x.trim().toUpperCase())
+    .filter(Boolean)
+);
+
 const CANDLE_MS = 5 * 60 * 1000;
 const EVALUATE_OFFSET_MS = 20 * 1000; // run 20s after each 5-minute close
 const TRACK_MS = 5 * 1000;
@@ -101,6 +110,7 @@ export class LiveSignalEngine {
   public getStatus() {
     return {
       underlyings: UNDERLYINGS.map(u => u.symbol),
+      paused: [...PAUSED_SYMBOLS],
       openSignals: this.store.getOpenSignals().length,
       lastRun: this.lastRun,
       sessionActive: !!this.streamer.getSessionAuth(),
@@ -137,6 +147,10 @@ export class LiveSignalEngine {
       const instruments = await getInstruments();
 
       for (const u of UNDERLYINGS) {
+        if (PAUSED_SYMBOLS.has(u.symbol.toUpperCase())) {
+          skipped.push(`${u.symbol}: paused (SIGNAL_PAUSED_SYMBOLS)`);
+          continue;
+        }
         const window = ACTIVE_RULES.entryWindow[u.market];
         if (minutes < window.start || minutes > window.end) {
           skipped.push(`${u.symbol}: outside entry window`);
