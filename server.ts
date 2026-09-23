@@ -1389,6 +1389,14 @@ function priceActionSignalLevels(signal: any) {
   };
 }
 
+// Trial period: every live-engine Telegram message is labelled until the
+// strategy has a real track record. Set SIGNAL_TRIAL_MODE=off to remove.
+const SIGNAL_TRIAL_MODE = (process.env.SIGNAL_TRIAL_MODE || 'on').toLowerCase() !== 'off';
+const TRIAL_BANNER_HTML =
+  '🧪 <b>TRIAL SIGNAL</b> - strategy under live testing, not a trade recommendation. Paper trade only.\n' +
+  '🧪 <b>चाचणी सिग्नल</b> - स्ट्रॅटेजीची चाचणी सुरू आहे, ट्रेडसाठी शिफारस नाही.\n';
+const trialBanner = () => (SIGNAL_TRIAL_MODE ? TRIAL_BANNER_HTML : '');
+
 function formatPriceActionSignalTelegramHtml(signal: any, channelName?: string): string {
   const lv = priceActionSignalLevels(signal)!;
   const isCall = lv.optionType === 'CE';
@@ -1401,7 +1409,7 @@ function formatPriceActionSignalTelegramHtml(signal: any, channelName?: string):
     .join('\n');
 
   return `
-<b>${signalEmoji} BUY ${lv.optionSymbol}</b>
+${trialBanner()}<b>${signalEmoji} BUY ${lv.optionSymbol}</b>
 ━━━━━━━━━━━━━━━━━━━━━
 📊 <b>Underlying:</b> ${lv.indexSymbol}${lv.spot ? ` @ ${lv.spot.toFixed(2)}` : ''}
 🎟 <b>Strike:</b> ${lv.strike} ${lv.optionType} (${isCall ? 'Call' : 'Put'})${signal.optionExpiry ? ` | Expiry ${signal.optionExpiry}` : ''}${signal.lotSize ? ` | Lot ${signal.lotSize}` : ''}
@@ -1444,7 +1452,7 @@ function formatSignalUpdateTelegramHtml(signal: PriceActionSignal, event: Signal
   };
 
   return `
-<b>${headline[event]}</b>
+${trialBanner()}<b>${headline[event]}</b>
 <b>${signal.optionSymbol}</b>
 ━━━━━━━━━━━━━━━━━━━━━
 • <b>Entry:</b> ₹${entry.toFixed(2)}
@@ -1787,7 +1795,7 @@ app.get('/api/price-action/signals', (req: Request, res: Response) => {
     signals,
     statistics,
     profiles,
-    engine: liveSignalEngine.getStatus(),
+    engine: { ...liveSignalEngine.getStatus(), trialMode: SIGNAL_TRIAL_MODE },
     timestamp: new Date().toISOString(),
   });
 });

@@ -54,6 +54,7 @@ export const PriceActionSignalsDashboard: React.FC = () => {
   const [signals, setSignals] = useState<PriceActionSignal[]>([]);
   const [profiles, setProfiles] = useState<Record<string, IndexEdgeProfile>>({});
   const [statistics, setStatistics] = useState<any>(null);
+  const [trialMode, setTrialMode] = useState<boolean>(true);
   const [loading, setLoading] = useState<boolean>(true);
   const [expandedSignalId, setExpandedSignalId] = useState<string | null>(null);
   const [executionMessage, setExecutionMessage] = useState<string | null>(null);
@@ -85,6 +86,7 @@ export const PriceActionSignalsDashboard: React.FC = () => {
         setSignals(res.signals);
         setProfiles(res.profiles);
         setStatistics(res.statistics);
+        setTrialMode(res.engine?.trialMode !== false);
       }
     } catch (err) {
       console.warn('Failed to load Chanakya Pro signals:', err);
@@ -356,6 +358,13 @@ export const PriceActionSignalsDashboard: React.FC = () => {
         </div>
       ) : (
         <>
+          {trialMode && (
+            <div className="px-4 py-2 bg-amber-500/10 border-b border-amber-500/40 text-xs text-amber-200 leading-relaxed">
+              🧪 <strong>TRIAL</strong> - the live signal engine is under testing. Signals are not trade
+              recommendations; paper trade only until a real track record is built.
+              <span className="block text-amber-300/80">चाचणी सिग्नल - ट्रेडसाठी शिफारस नाही.</span>
+            </div>
+          )}
           {/* 4 Performance Metric Cards */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 p-4 bg-[#090e1a] border-b border-slate-800/80">
             <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-3">

@@ -433,6 +433,7 @@ export async function fetchPriceActionSignals(index?: string): Promise<{
   signals: any[];
   statistics: any;
   profiles: Record<string, any>;
+  engine?: { trialMode?: boolean; [key: string]: any };
   timestamp: string;
 }> {
   const url = index && index !== 'ALL' ? `/api/price-action/signals?index=${encodeURIComponent(index)}` : '/api/price-action/signals';
