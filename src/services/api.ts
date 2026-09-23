@@ -1,5 +1,32 @@
 import { Ticker, OptionChainData, HistoricalCandle, AuditLog, DeveloperSettings, SubscriptionStatus, GttOrder, BacktestResult, AlertWebhookSettings } from '../types/market';
 
+// Admin-only endpoints (Developer Settings, Telegram config, broker auth)
+// now require this header server-side -- see server.ts's requireAdmin
+// middleware. The operator enters their ADMIN_API_TOKEN once in the
+// Developer Settings modal; it's stored locally and attached here.
+const ADMIN_TOKEN_STORAGE_KEY = 'sharemarket_admin_token';
+
+export function getAdminToken(): string {
+  try {
+    return localStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
+export function setAdminToken(token: string): void {
+  try {
+    localStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token);
+  } catch {
+    // ignore (e.g. private browsing with storage disabled)
+  }
+}
+
+function adminHeaders(): Record<string, string> {
+  const token = getAdminToken();
+  return token ? { 'X-Admin-Token': token } : {};
+}
+
 export async function fetchMarketTickers(): Promise<Ticker[]> {
   try {
     const res = await fetch('/api/market/tickers');
@@ -13,19 +40,14 @@ export async function fetchMarketTickers(): Promise<Ticker[]> {
   }
 }
 
-export async function fetchOptionChain(symbol: string): Promise<OptionChainData> {
-  try {
-    const res = await fetch(`/api/market/option-chain?symbol=${encodeURIComponent(symbol)}`);
-    if (!res.ok) throw new Error(`HTTP error ${res.status}`);
-    const json = await res.json();
-    return json.data;
-  } catch (err) {
-    console.warn('Falling back to local option chain:', err);
-    const { generateOptionChain, INITIAL_TICKERS } = await import('../data/marketData');
-    const matched = INITIAL_TICKERS.find(t => t.symbol.toUpperCase() === symbol.toUpperCase());
-    const spot = matched ? matched.ltp : (symbol === 'BANKNIFTY' ? 51940 : 24824.50);
-    return generateOptionChain(symbol, spot);
-  }
+export async function fetchOptionChain(symbol: string, expiry?: string): Promise<OptionChainData> {
+  // Live from Angel One via the server; no simulated fallback.
+  const params = new URLSearchParams({ symbol });
+  if (expiry) params.set('expiry', expiry);
+  const res = await fetch(`/api/market/option-chain?${params}`);
+  const json = await res.json().catch(() => null);
+  if (!res.ok || !json?.success) throw new Error(json?.error || `HTTP error ${res.status}`);
+  return json.data;
 }
 
 export async function fetchCandleHistory(symbol: string, timeframe: string): Promise<HistoricalCandle[]> {
@@ -75,7 +97,7 @@ export async function generateServerTotp(totpSecret?: string): Promise<{
   try {
     const res = await fetch('/api/broker/angelone/generate-totp', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...adminHeaders() },
       body: JSON.stringify({ totpSecret }),
     });
     if (!res.ok) throw new Error(`HTTP error ${res.status}`);
@@ -99,15 +121,20 @@ export async function authenticateBroker(credentials: {
 }): Promise<any> {
   const res = await fetch('/api/broker/angelone/auth', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...adminHeaders() },
     body: JSON.stringify(credentials),
   });
-  if (!res.ok) throw new Error(`HTTP error ${res.status}`);
-  return res.json();
+  // A rejected login (401) still carries a real, meaningful JSON body
+  // (Angel One's own error message) -- return it instead of throwing, so
+  // the caller can show the real reason instead of falling back to a
+  // "pretend it worked" path meant only for genuine network failures.
+  const json = await res.json().catch(() => null);
+  if (!json) throw new Error(`HTTP error ${res.status}`);
+  return json;
 }
 
 export async function fetchDeveloperSettings(): Promise<DeveloperSettings> {
-  const res = await fetch('/api/developer/config');
+  const res = await fetch('/api/developer/config', { headers: { ...adminHeaders() } });
   if (!res.ok) throw new Error(`HTTP error ${res.status}`);
   const json = await res.json();
   return json.data;
@@ -116,7 +143,7 @@ export async function fetchDeveloperSettings(): Promise<DeveloperSettings> {
 export async function saveDeveloperSettings(settings: Partial<DeveloperSettings>): Promise<any> {
   const res = await fetch('/api/developer/config', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...adminHeaders() },
     body: JSON.stringify(settings),
   });
   if (!res.ok) throw new Error(`HTTP error ${res.status}`);
@@ -134,8 +161,7 @@ export async function fetchAuditLogs(): Promise<AuditLog[]> {
     return json.data;
   } catch (err) {
     console.warn('Failed to fetch audit logs:', err);
-    const { INITIAL_AUDIT_LOGS } = await import('../data/marketData');
-    return INITIAL_AUDIT_LOGS;
+    return [];
   }
 }
 
@@ -160,47 +186,36 @@ export async function logAuditEvent(entry: {
 export async function createSubscriptionOrder(amountOrPlan: any, planOrAmount?: any): Promise<any> {
   const amount = typeof amountOrPlan === 'number' ? amountOrPlan : planOrAmount || 999;
   const planId = typeof amountOrPlan === 'string' ? amountOrPlan : planOrAmount || 'MONTHLY';
-  
-  try {
-    const res = await fetch('/api/subscription/create-order', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ planId, amount }),
-    });
-    if (!res.ok) throw new Error(`HTTP error ${res.status}`);
-    return await res.json();
-  } catch (err) {
-    return {
-      orderId: `order_rzp_${Date.now()}`,
-      amount: amount * 100,
-      currency: 'INR',
-      keyId: 'rzp_live_gateway_init',
-    };
+
+  const res = await fetch('/api/subscription/create-order', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ planId, amount }),
+  });
+  const json = await res.json().catch(() => null);
+  // A real failure here must not be papered over with a fabricated order
+  // (a fake orderId/keyId previously let checkout "succeed" with no real
+  // payment ever collected).
+  if (!res.ok || !json?.success) {
+    throw new Error(json?.error || `Payment gateway request failed (HTTP ${res.status})`);
   }
+  return json;
 }
 
-export async function verifySubscriptionPayment(payload: any): Promise<{ success: boolean; subscription: SubscriptionStatus }> {
-  try {
-    const res = await fetch('/api/subscription/verify', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) throw new Error(`HTTP error ${res.status}`);
-    return await res.json();
-  } catch (err) {
-    return {
-      success: true,
-      subscription: {
-        isTrial: false,
-        trialDaysLeft: 0,
-        trialExpiryDate: '2025-09-13',
-        plan: payload.plan === 'ANNUAL' ? 'INSTITUTIONAL_ANNUAL' : 'PRO_MONTHLY',
-        active: true,
-        expiresAt: '2025-09-13',
-      },
-    };
+export async function verifySubscriptionPayment(payload: any): Promise<{ success: boolean; error?: string; subscription?: SubscriptionStatus }> {
+  const res = await fetch('/api/subscription/verify', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const json = await res.json().catch(() => null);
+  // Previously any network/parse error here silently returned
+  // success:true, granting a free PRO upgrade with no real payment
+  // verified. A failed or unreachable verification must fail closed.
+  if (!json) {
+    return { success: false, error: `Verification request failed (HTTP ${res.status})` };
   }
+  return json;
 }
 
 // -------------------------------------------------------------
@@ -213,40 +228,23 @@ export async function fetchGttOrders(): Promise<GttOrder[]> {
     const json = await res.json();
     return json.data || [];
   } catch (err) {
-    console.warn('Falling back to initial GTT orders:', err);
-    const { INITIAL_GTT_ORDERS } = await import('../data/marketData');
-    return INITIAL_GTT_ORDERS;
+    console.warn('Failed to fetch GTT orders:', err);
+    return [];
   }
 }
 
 export async function createGttOrder(order: Partial<GttOrder>): Promise<GttOrder> {
-  try {
-    const res = await fetch('/api/orders/gtt', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(order),
-    });
-    if (!res.ok) throw new Error(`HTTP error ${res.status}`);
-    const json = await res.json();
-    return json.data;
-  } catch (err) {
-    console.warn('Fallback creating local GTT order:', err);
-    return {
-      id: `gtt-${Date.now()}`,
-      symbol: order.symbol || 'NIFTY 50',
-      side: order.side || 'BUY',
-      product: order.product || 'NRML',
-      quantity: order.quantity || 25,
-      triggerPrice: order.triggerPrice || 24800,
-      limitPrice: order.limitPrice || 24800,
-      trailingStopLossPoints: order.trailingStopLossPoints,
-      trailingTargetPrice: order.trailingTargetPrice,
-      highestLtpSeen: order.triggerPrice || 24800,
-      status: 'ACTIVE',
-      createdAt: new Date().toLocaleDateString(),
-      brokerMode: order.brokerMode || 'PAPER',
-    };
-  }
+  const res = await fetch('/api/orders/gtt', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(order),
+  });
+  // A GTT order that failed to save server-side must not be shown to the
+  // user as created (the previous fallback fabricated a client-only order
+  // object that was never actually persisted).
+  if (!res.ok) throw new Error(`Failed to create GTT order (HTTP ${res.status})`);
+  const json = await res.json();
+  return json.data;
 }
 
 export async function cancelGttOrder(id: string): Promise<boolean> {
@@ -257,7 +255,7 @@ export async function cancelGttOrder(id: string): Promise<boolean> {
     return res.ok;
   } catch (err) {
     console.warn('Failed to delete GTT order:', err);
-    return true;
+    return false;
   }
 }
 
@@ -305,7 +303,7 @@ export async function broadcastTargetWinToTelegram(
   try {
     const res = await fetch('/api/telegram/broadcast-target-win', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...adminHeaders() },
       body: JSON.stringify({ winData, customChannel, customBotToken }),
     });
     if (!res.ok) throw new Error(`HTTP error ${res.status}`);
@@ -383,49 +381,15 @@ export async function runStrategyBacktest(
   timeframe: '6M' | '1Y' | '3Y' = '1Y',
   symbol: string = 'NIFTY 50'
 ): Promise<BacktestResult> {
-  try {
-    const res = await fetch('/api/strategy/backtest', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ strategyId, timeframe, symbol }),
-    });
-    if (!res.ok) throw new Error(`HTTP error ${res.status}`);
-    const json = await res.json();
-    return json.data;
-  } catch (err) {
-    console.warn('Fallback backtest computation:', err);
-    // Return robust fallback
-    return {
-      strategyId,
-      strategyName: 'Iron Condor (Delta-Neutral)',
-      timeframe,
-      totalTrades: timeframe === '6M' ? 142 : timeframe === '1Y' ? 284 : 852,
-      winTrades: timeframe === '6M' ? 98 : timeframe === '1Y' ? 198 : 596,
-      lossTrades: timeframe === '6M' ? 44 : timeframe === '1Y' ? 86 : 256,
-      winRatePercent: 69.7,
-      profitFactor: 1.92,
-      cagrPercent: 26.4,
-      maxDrawdownPercent: -7.2,
-      netPnl: 342800,
-      sharpeRatio: 1.86,
-      monthlyBreakdown: [
-        { month: "Jan '25", pnl: 28400, winRate: 72, trades: 24 },
-        { month: "Feb '25", pnl: 32100, winRate: 75, trades: 22 },
-        { month: "Mar '25", pnl: -9800, winRate: 58, trades: 26 },
-        { month: "Apr '25", pnl: 41200, winRate: 78, trades: 25 },
-        { month: "May '25", pnl: 36500, winRate: 74, trades: 23 },
-        { month: "Jun '25", pnl: 29800, winRate: 71, trades: 24 },
-      ],
-      equityCurve: [
-        { date: "Jan '25", equity: 100000, benchmark: 100000 },
-        { date: "Feb '25", equity: 128400, benchmark: 102400 },
-        { date: "Mar '25", equity: 160500, benchmark: 104800 },
-        { date: "Apr '25", equity: 150700, benchmark: 103200 },
-        { date: "May '25", equity: 191900, benchmark: 106900 },
-        { date: "Jun '25", equity: 228400, benchmark: 110200 },
-      ],
-    };
-  }
+  // No client-side fallback: the old one returned fixed, invented results.
+  const res = await fetch('/api/strategy/backtest', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ strategyId, timeframe, symbol }),
+  });
+  const json = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(json?.error || `HTTP error ${res.status}`);
+  return json.data;
 }
 
 export async function fetchAngelOneLtp(symbol: string, exchange?: string): Promise<any> {
@@ -469,6 +433,7 @@ export async function fetchPriceActionSignals(index?: string): Promise<{
   signals: any[];
   statistics: any;
   profiles: Record<string, any>;
+  engine?: { trialMode?: boolean; [key: string]: any };
   timestamp: string;
 }> {
   const url = index && index !== 'ALL' ? `/api/price-action/signals?index=${encodeURIComponent(index)}` : '/api/price-action/signals';
@@ -510,7 +475,7 @@ export async function calibrateIndexProfile(
 ): Promise<{ success: boolean; profile: any; message: string }> {
   const res = await fetch('/api/price-action/calibrate', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...adminHeaders() },
     body: JSON.stringify({ indexSymbol, updates }),
   });
   if (!res.ok) throw new Error(`HTTP error ${res.status}`);

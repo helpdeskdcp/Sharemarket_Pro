@@ -162,32 +162,18 @@ export const BrokerAuthModal: React.FC<BrokerAuthModalProps> = ({ isOpen, onClos
       } else {
         setStatusMsg({
           type: 'ERROR',
-          text: res.message || 'Authentication failed. Please check Client Code & MPIN.',
+          text: res.error || res.message || 'Authentication failed. Please check Client Code & MPIN.',
         });
       }
     } catch (err) {
-      // Local fallback for smooth testing
-      connectBroker('Angel One SmartAPI');
-      updateDeveloperSettings({
-        ...developerSettings,
-        angelOne: {
-          ...developerSettings.angelOne,
-          clientCode: clientCode.trim().toUpperCase(),
-          mpin: mpin.trim(),
-          totpSecret: sanitizeBase32(totpSecret),
-          apiKey: apiKey.trim(),
-          connected: true,
-          isLive: true,
-          lastConnected: new Date().toISOString(),
-        },
-      });
+      // A real network/server failure -- show it instead of pretending the
+      // broker connected. (Previously this silently marked the broker as
+      // connected on ANY error, which masked genuine login rejections once
+      // /api/broker/angelone/auth started performing a real Angel One login.)
       setStatusMsg({
-        type: 'SUCCESS',
-        text: `Angel One SmartAPI connected! Auto-TOTP: ${liveTotp}`,
+        type: 'ERROR',
+        text: err instanceof Error ? err.message : 'Could not reach the server. Please try again.',
       });
-      setTimeout(() => {
-        onClose();
-      }, 1400);
     } finally {
       setLoading(false);
     }

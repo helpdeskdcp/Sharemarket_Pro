@@ -1,22 +1,53 @@
 import WebSocket from 'ws';
-import { Ticker, Exchange, InstrumentType } from '../types/market';
+import { Ticker, Exchange, InstrumentType, MarketDepthItem } from '../types/market';
+import { getInstruments, todayKeyIST, InstrumentRow } from './instrumentMaster';
+
+export type AngelOneFeedStatus =
+  | 'ANGELONE_WS_CONNECTED'
+  | 'ANGELONE_REST_LIVE'
+  | 'REAL_EXCHANGE_LIVE'
+  | 'CONNECTING'
+  | 'DISCONNECTED';
+
+export interface McxContractInfo {
+  symbol: string;
+  angelName: string;
+  token: string;
+  tradingSymbol: string;
+  expiry: string;
+  lastAngelTick: string | null;
+}
 
 export interface AngelOneMarketFeedState {
   connected: boolean;
-  feedStatus: 'ANGELONE_WS_CONNECTED' | 'REAL_EXCHANGE_LIVE' | 'CONNECTING' | 'DISCONNECTED';
+  feedStatus: AngelOneFeedStatus;
   lastTickTimestamp: string;
   source: string;
   totalTicksReceived: number;
   activeClientCode: string;
   subscribedTokens: string[];
   latencyMs: number;
+  sessionActive: boolean;
+  mcxContracts: McxContractInfo[];
+}
+
+interface SymbolMeta {
+  yahooSymbol: string;
+  token: string;
+  exchange: Exchange;
+  name: string;
+  instrumentType: InstrumentType;
+  lotSize: number;
+  // MCX only: underlying name in Angel One's instrument master. The token
+  // for these is resolved at runtime to the nearest-expiry FUTCOM contract,
+  // because MCX futures tokens change every month on expiry.
+  angelName?: string;
+  tradingSymbol?: string;
+  expiry?: string;
 }
 
 // Live Exchange Symbol to Market Ticker Mapping
-export const EXCHANGE_SYMBOL_MAP: Record<
-  string,
-  { yahooSymbol: string; token: string; exchange: Exchange; name: string; instrumentType: InstrumentType; lotSize: number }
-> = {
+export const EXCHANGE_SYMBOL_MAP: Record<string, SymbolMeta> = {
   'NIFTY 50': { yahooSymbol: '^NSEI', token: '99926000', exchange: 'NSE', name: 'Nifty 50 Benchmark Index', instrumentType: 'INDEX', lotSize: 25 },
   'BANKNIFTY': { yahooSymbol: '^NSEBANK', token: '99926009', exchange: 'NSE', name: 'Nifty Bank Index', instrumentType: 'INDEX', lotSize: 15 },
   'FINNIFTY': { yahooSymbol: 'NIFTY_FIN_SERVICE.NS', token: '99926037', exchange: 'NSE', name: 'Nifty Financial Services', instrumentType: 'INDEX', lotSize: 25 },
@@ -36,36 +67,96 @@ export const EXCHANGE_SYMBOL_MAP: Record<
   'NASDAQ': { yahooSymbol: '^IXIC', token: 'IXIC', exchange: 'GLOBAL', name: 'Nasdaq Composite Index', instrumentType: 'GLOBAL', lotSize: 1 },
   'S&P 500': { yahooSymbol: '^GSPC', token: 'SPX', exchange: 'GLOBAL', name: 'S&P 500 Index', instrumentType: 'GLOBAL', lotSize: 1 },
   'DOW JONES': { yahooSymbol: '^DJI', token: 'DJI', exchange: 'GLOBAL', name: 'Dow Jones Industrial Average', instrumentType: 'GLOBAL', lotSize: 1 },
-  'CRUDE OIL': { yahooSymbol: 'CL=F', token: 'MCX_CRUDE', exchange: 'MCX', name: 'Crude Oil Futures (MCX)', instrumentType: 'COMMODITY', lotSize: 100 },
-  'CRUDEOIL': { yahooSymbol: 'CL=F', token: 'MCX_CRUDE', exchange: 'MCX', name: 'MCX Crude Oil Futures', instrumentType: 'COMMODITY', lotSize: 100 },
-  'CRUDEOILMINI': { yahooSymbol: 'CL=F', token: 'MCX_CRDM', exchange: 'MCX', name: 'MCX Crude Oil Mini Futures', instrumentType: 'COMMODITY', lotSize: 10 },
-  'NATURALGAS': { yahooSymbol: 'NG=F', token: 'MCX_NG', exchange: 'MCX', name: 'MCX Natural Gas Futures', instrumentType: 'COMMODITY', lotSize: 1250 },
-  'NATURALGASMINI': { yahooSymbol: 'NG=F', token: 'MCX_NGM', exchange: 'MCX', name: 'MCX Natural Gas Mini Futures', instrumentType: 'COMMODITY', lotSize: 250 },
-  'GOLD': { yahooSymbol: 'GC=F', token: 'MCX_GOLD', exchange: 'MCX', name: 'MCX Gold Bullion Futures', instrumentType: 'COMMODITY', lotSize: 1 },
-  'GOLDMINI': { yahooSymbol: 'GC=F', token: 'MCX_GLDM', exchange: 'MCX', name: 'MCX Gold Mini Futures', instrumentType: 'COMMODITY', lotSize: 1 },
-  'SILVER': { yahooSymbol: 'SI=F', token: 'MCX_SILVER', exchange: 'MCX', name: 'MCX Silver Bullion Futures', instrumentType: 'COMMODITY', lotSize: 30 },
-  'SILVERMINI': { yahooSymbol: 'SI=F', token: 'MCX_SLVM', exchange: 'MCX', name: 'MCX Silver Mini Futures', instrumentType: 'COMMODITY', lotSize: 5 },
-  'COPPER': { yahooSymbol: 'HG=F', token: 'MCX_COPPER', exchange: 'MCX', name: 'MCX Copper Futures', instrumentType: 'COMMODITY', lotSize: 2500 },
-  'ZINC': { yahooSymbol: 'ZNC=F', token: 'MCX_ZINC', exchange: 'MCX', name: 'MCX Zinc Futures', instrumentType: 'COMMODITY', lotSize: 5000 },
+  'CRUDE OIL': { yahooSymbol: 'CL=F', token: '', angelName: 'CRUDEOIL', exchange: 'MCX', name: 'Crude Oil Futures (MCX)', instrumentType: 'COMMODITY', lotSize: 100 },
+  'CRUDEOIL': { yahooSymbol: 'CL=F', token: '', angelName: 'CRUDEOIL', exchange: 'MCX', name: 'MCX Crude Oil Futures', instrumentType: 'COMMODITY', lotSize: 100 },
+  'CRUDEOILMINI': { yahooSymbol: 'CL=F', token: '', angelName: 'CRUDEOILM', exchange: 'MCX', name: 'MCX Crude Oil Mini Futures', instrumentType: 'COMMODITY', lotSize: 10 },
+  'NATURALGAS': { yahooSymbol: 'NG=F', token: '', angelName: 'NATURALGAS', exchange: 'MCX', name: 'MCX Natural Gas Futures', instrumentType: 'COMMODITY', lotSize: 1250 },
+  'NATURALGASMINI': { yahooSymbol: 'NG=F', token: '', angelName: 'NATGASMINI', exchange: 'MCX', name: 'MCX Natural Gas Mini Futures', instrumentType: 'COMMODITY', lotSize: 250 },
+  'GOLD': { yahooSymbol: 'GC=F', token: '', angelName: 'GOLD', exchange: 'MCX', name: 'MCX Gold Bullion Futures', instrumentType: 'COMMODITY', lotSize: 1 },
+  'GOLDMINI': { yahooSymbol: 'GC=F', token: '', angelName: 'GOLDM', exchange: 'MCX', name: 'MCX Gold Mini Futures', instrumentType: 'COMMODITY', lotSize: 1 },
+  'SILVER': { yahooSymbol: 'SI=F', token: '', angelName: 'SILVER', exchange: 'MCX', name: 'MCX Silver Bullion Futures', instrumentType: 'COMMODITY', lotSize: 30 },
+  'SILVERMINI': { yahooSymbol: 'SI=F', token: '', angelName: 'SILVERM', exchange: 'MCX', name: 'MCX Silver Mini Futures', instrumentType: 'COMMODITY', lotSize: 5 },
+  'COPPER': { yahooSymbol: 'HG=F', token: '', angelName: 'COPPER', exchange: 'MCX', name: 'MCX Copper Futures', instrumentType: 'COMMODITY', lotSize: 2500 },
+  'ZINC': { yahooSymbol: 'ZNC=F', token: '', angelName: 'ZINC', exchange: 'MCX', name: 'MCX Zinc Futures', instrumentType: 'COMMODITY', lotSize: 5000 },
 };
+
+const SMARTAPI_BASE = 'https://apiconnect.angelone.in';
+const SMART_STREAM_URL = 'wss://smartapisocket.angelone.in/smart-stream';
+
+// SmartAPI WebSocket 2.0 exchange type codes
+const WS_EXCHANGE_TYPE: Partial<Record<Exchange, number>> = { NSE: 1, BSE: 3, MCX: 5 };
+const WS_EXCHANGE_BY_CODE: Record<number, Exchange> = { 1: 'NSE', 3: 'BSE', 5: 'MCX' };
+
+// A symbol counts as Angel-live while it has had an Angel One tick within
+// this window; until then (or once it goes stale) the Yahoo fallback may
+// update it.
+const ANGEL_FRESH_MS = 30_000;
+const QUOTE_POLL_MS = 3_000;
+const WS_HEARTBEAT_MS = 10_000;
+const NOTIFY_THROTTLE_MS = 250;
+
+interface AngelQuoteUpdate {
+  ltp: number;
+  open?: number;
+  high?: number;
+  low?: number;
+  close?: number;
+  volume?: number;
+  bidDepth?: MarketDepthItem[];
+  askDepth?: MarketDepthItem[];
+}
+
+function toDepth(levels: any[] | undefined): MarketDepthItem[] | undefined {
+  if (!Array.isArray(levels) || levels.length === 0) return undefined;
+  return levels.map(l => ({
+    price: Number(l.price) || 0,
+    quantity: Number(l.quantity) || 0,
+    orders: Number(l.orders) || 0,
+  }));
+}
 
 export class AngelOneLiveStreamer {
   private static instance: AngelOneLiveStreamer;
   private ws: WebSocket | null = null;
   private listeners: ((tickers: Ticker[], flashes: Record<string, 'UP' | 'DOWN'>) => void)[] = [];
   private currentTickers: Map<string, Ticker> = new Map();
-  private isConnecting = false;
   private totalTicks = 0;
-  private feedStatus: 'ANGELONE_WS_CONNECTED' | 'REAL_EXCHANGE_LIVE' | 'CONNECTING' | 'DISCONNECTED' = 'CONNECTING';
   private pollingTimer: NodeJS.Timeout | null = null;
-  private clientCode = 'DCP78912';
-  private apiKey = 'ANGEL_LIVE_SANDBOX_KEY_8829';
-  private feedToken = 'FT_SMARTAPI_TOKEN_991823';
+
+  // Real SmartAPI session -- empty until the server logs in.
+  private clientCode = '';
+  private apiKey = '';
+  private feedToken = '';
+  private jwtToken = '';
+  private sessionExpiredHandler: (() => void) | null = null;
+  private lastSessionRefreshRequest = 0;
+
+  // exchange:token -> ticker symbols (CRUDE OIL and CRUDEOIL share a contract)
+  private tokenIndex: Map<string, string[]> = new Map();
+  private angelLiveAt: Map<string, number> = new Map();
+  private lastWsTickAt = 0;
+  private lastRestQuoteAt = 0;
+  private lastYahooTickAt = 0;
+
+  private wsGeneration = 0;
+  private wsHeartbeat: NodeJS.Timeout | null = null;
+  private wsReconnectTimer: NodeJS.Timeout | null = null;
+  private wsReconnectDelay = 5_000;
+
+  private mcxFutures: InstrumentRow[] = [];
+
+  private pendingFlashes: Record<string, 'UP' | 'DOWN'> = {};
+  private notifyTimer: NodeJS.Timeout | null = null;
 
   private constructor() {
     this.initializeTickers();
+    this.rebuildTokenIndex();
     this.startRealTimeExchangeFeed();
-    this.connectAngelOneWebSocket();
+    this.startAngelQuotePolling();
+    this.refreshMcxContracts();
+    // Re-check hourly so contracts roll over on expiry; the instrument
+    // master itself is only re-downloaded about once a day (instrumentMaster.ts).
+    setInterval(() => this.refreshMcxContracts(), 60 * 60 * 1000);
   }
 
   public static getInstance(): AngelOneLiveStreamer {
@@ -135,15 +226,228 @@ export class AngelOneLiveStreamer {
     });
   }
 
-  // Update credentials and re-establish SmartAPI WebSocket
-  public updateCredentials(clientCode: string, apiKey: string, feedToken?: string) {
+  private rebuildTokenIndex() {
+    this.tokenIndex.clear();
+    Object.entries(EXCHANGE_SYMBOL_MAP).forEach(([sym, meta]) => {
+      if (!meta.token || !WS_EXCHANGE_TYPE[meta.exchange]) return;
+      const key = `${meta.exchange}:${meta.token}`;
+      this.tokenIndex.set(key, [...(this.tokenIndex.get(key) || []), sym]);
+    });
+  }
+
+  // Unique Angel One tokens per exchange (NSE/BSE/MCX) for quotes and subscriptions.
+  private angelTokensByExchange(): Partial<Record<Exchange, string[]>> {
+    const out: Partial<Record<Exchange, string[]>> = {};
+    for (const key of this.tokenIndex.keys()) {
+      const [exchange, token] = key.split(':') as [Exchange, string];
+      (out[exchange] = out[exchange] || []).push(token);
+    }
+    return out;
+  }
+
+  private hasSession(): boolean {
+    return !!(this.jwtToken && this.feedToken && this.apiKey && this.clientCode);
+  }
+
+  private isAngelFresh(sym: string): boolean {
+    return Date.now() - (this.angelLiveAt.get(sym) || 0) < ANGEL_FRESH_MS;
+  }
+
+  // Called by the server when Angel One rejects the session (expired JWT).
+  public onSessionExpired(handler: () => void) {
+    this.sessionExpiredHandler = handler;
+  }
+
+  private requestSessionRefresh(reason: string) {
+    if (!this.sessionExpiredHandler) return;
+    if (Date.now() - this.lastSessionRefreshRequest < 5 * 60 * 1000) return;
+    this.lastSessionRefreshRequest = Date.now();
+    console.warn(`[AngelOne] session rejected (${reason}); requesting re-login`);
+    this.sessionExpiredHandler();
+  }
+
+  // Update credentials and (re)establish the SmartAPI WebSocket. Every
+  // visitor's client calls the reconnect endpoint, so an unchanged session
+  // with a healthy socket is left alone rather than reconnected.
+  public updateCredentials(clientCode: string, apiKey: string, feedToken?: string, jwtToken?: string) {
+    const changed =
+      clientCode !== this.clientCode ||
+      apiKey !== this.apiKey ||
+      (!!feedToken && feedToken !== this.feedToken) ||
+      (!!jwtToken && jwtToken !== this.jwtToken);
+
     this.clientCode = clientCode;
     this.apiKey = apiKey;
     if (feedToken) this.feedToken = feedToken;
-    this.connectAngelOneWebSocket();
+    if (jwtToken) this.jwtToken = jwtToken;
+
+    const wsHealthy = this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING);
+    if (changed || !wsHealthy) {
+      this.connectAngelOneWebSocket();
+    }
   }
 
-  // Real-time live market feed poller from financial exchange gateways
+  public getSessionAuth(): { apiKey: string; jwtToken: string } | null {
+    return this.hasSession() ? { apiKey: this.apiKey, jwtToken: this.jwtToken } : null;
+  }
+
+  public getInstrument(symbol: string): SymbolMeta | undefined {
+    return EXCHANGE_SYMBOL_MAP[symbol.toUpperCase()];
+  }
+
+  // ---- MCX contract resolution -------------------------------------------
+
+  private async refreshMcxContracts() {
+    try {
+      const names = new Set(Object.values(EXCHANGE_SYMBOL_MAP).map(m => m.angelName).filter(Boolean));
+      this.mcxFutures = (await getInstruments()).filter(
+        i => i.exchange === 'MCX' && i.instrumentType === 'FUTCOM' && names.has(i.name)
+      );
+      this.applyNearestMcxContracts();
+    } catch (err: any) {
+      console.warn('[MCX] contract refresh failed:', err?.message || err);
+    }
+  }
+
+  private applyNearestMcxContracts() {
+    const today = todayKeyIST();
+    const changes: string[] = [];
+
+    Object.entries(EXCHANGE_SYMBOL_MAP).forEach(([sym, meta]) => {
+      if (!meta.angelName) return;
+      const nearest = this.mcxFutures
+        .filter(f => f.name === meta.angelName && f.expiryKey >= today)
+        .sort((a, b) => a.expiryKey - b.expiryKey)[0];
+      if (!nearest || nearest.token === meta.token) return;
+
+      meta.token = nearest.token;
+      meta.tradingSymbol = nearest.symbol;
+      meta.expiry = nearest.expiry;
+      this.angelLiveAt.delete(sym);
+      const ticker = this.currentTickers.get(sym);
+      if (ticker) this.currentTickers.set(sym, { ...ticker, name: `${meta.name} (${nearest.expiry})` });
+      changes.push(`${sym}=${nearest.symbol}/${nearest.token}`);
+    });
+
+    if (changes.length) {
+      console.log(`[MCX] contracts resolved: ${changes.join(', ')}`);
+      this.rebuildTokenIndex();
+      // Resubscribe so the socket streams the new contracts.
+      if (this.hasSession()) this.connectAngelOneWebSocket();
+    }
+  }
+
+  // ---- Angel One tick application -----------------------------------------
+
+  private applyAngelQuote(exchange: Exchange, token: string, q: AngelQuoteUpdate): boolean {
+    const syms = this.tokenIndex.get(`${exchange}:${token}`);
+    if (!syms || !(q.ltp > 0)) return false;
+
+    syms.forEach(sym => {
+      const existing = this.currentTickers.get(sym);
+      if (!existing) return;
+
+      const ltp = Number(q.ltp.toFixed(2));
+      const close = q.close && q.close > 0 ? q.close : existing.close;
+      const change = Number((ltp - close).toFixed(2));
+      const changePercent = Number(((change / (close || 1)) * 100).toFixed(2));
+      const direction = ltp >= existing.ltp ? 'UP' : 'DOWN';
+      if (ltp !== existing.ltp) this.pendingFlashes[sym] = direction;
+
+      this.currentTickers.set(sym, {
+        ...existing,
+        ltp,
+        change,
+        changePercent,
+        open: q.open && q.open > 0 ? q.open : existing.open,
+        high: q.high && q.high > 0 ? Math.max(q.high, ltp) : Math.max(existing.high, ltp),
+        low: q.low && q.low > 0 ? Math.min(q.low, ltp) : Math.min(existing.low, ltp),
+        close,
+        volume: q.volume && q.volume > 0 ? q.volume : existing.volume,
+        bidDepth: q.bidDepth || existing.bidDepth,
+        askDepth: q.askDepth || existing.askDepth,
+        tickDirection: direction,
+        lastUpdated: new Date().toISOString(),
+      });
+      this.angelLiveAt.set(sym, Date.now());
+    });
+
+    this.totalTicks++;
+    return true;
+  }
+
+  // Coalesce bursts of WebSocket ticks into one broadcast per interval.
+  private queueNotify() {
+    if (this.notifyTimer) return;
+    this.notifyTimer = setTimeout(() => {
+      this.notifyTimer = null;
+      const flashes = this.pendingFlashes;
+      this.pendingFlashes = {};
+      this.notifyListeners(flashes);
+    }, NOTIFY_THROTTLE_MS);
+  }
+
+  // ---- Angel One REST quote polling ---------------------------------------
+
+  private startAngelQuotePolling() {
+    const poll = async () => {
+      if (!this.hasSession()) return;
+      const exchangeTokens = this.angelTokensByExchange();
+      if (!Object.keys(exchangeTokens).length) return;
+
+      try {
+        const res = await fetch(`${SMARTAPI_BASE}/rest/secure/angelbroking/market/v1/quote`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'X-UserType': 'USER',
+            'X-SourceID': 'WEB',
+            'X-ClientLocalIP': '127.0.0.1',
+            'X-ClientPublicIP': '127.0.0.1',
+            'X-MACAddress': 'fe80::1',
+            'X-PrivateKey': this.apiKey,
+            'Authorization': `Bearer ${this.jwtToken}`,
+          },
+          body: JSON.stringify({ mode: 'FULL', exchangeTokens }),
+        });
+
+        const data: any = await res.json().catch(() => null);
+        if (res.status === 401 || res.status === 403 || ['AG8001', 'AG8002', 'AG8003'].includes(data?.errorcode)) {
+          this.requestSessionRefresh(`quote API ${res.status} ${data?.errorcode || ''}`.trim());
+          return;
+        }
+        if (!data?.status || !Array.isArray(data?.data?.fetched)) {
+          console.warn('[AngelOne] quote API returned no data:', data?.message || res.status);
+          return;
+        }
+
+        data.data.fetched.forEach((q: any) => {
+          this.applyAngelQuote(q.exchange, String(q.symbolToken), {
+            ltp: Number(q.ltp),
+            open: Number(q.open),
+            high: Number(q.high),
+            low: Number(q.low),
+            close: Number(q.close),
+            volume: Number(q.tradeVolume),
+            bidDepth: toDepth(q.depth?.buy),
+            askDepth: toDepth(q.depth?.sell),
+          });
+        });
+        this.lastRestQuoteAt = Date.now();
+        this.queueNotify();
+      } catch (err: any) {
+        console.warn('[AngelOne] quote poll failed:', err?.message || err);
+      }
+    };
+
+    setInterval(poll, QUOTE_POLL_MS);
+  }
+
+  // ---- Fallback feed (Yahoo Finance) --------------------------------------
+  // Used for GLOBAL symbols, and for NSE/BSE/MCX only while Angel One has no
+  // fresh data for them. MCX values here are estimates converted from
+  // COMEX/NYMEX prices, not MCX prices.
   private startRealTimeExchangeFeed() {
     if (this.pollingTimer) clearInterval(this.pollingTimer);
 
@@ -151,85 +455,19 @@ export class AngelOneLiveStreamer {
 
     const fetchLiveExchangeBatch = async () => {
       try {
+        const needsFallback = (yahooSym: string) =>
+          Object.entries(EXCHANGE_SYMBOL_MAP).some(([sym, m]) => m.yahooSymbol === yahooSym && !this.isAngelFresh(sym));
+
         const symbolsToFetch = [
           '^NSEI', '^NSEBANK', '^BSESN', 'NIFTY_FIN_SERVICE.NS', 'NIFTY_MIDCAP_50.NS',
           'RELIANCE.NS', 'HDFCBANK.NS', 'INFY.NS', 'TCS.NS', 'TATAMOTORS.NS',
           'SBIN.NS', 'ICICIBANK.NS', 'BHARTIARTL.NS', '^INDIAVIX',
-          'CL=F', 'NG=F', 'GC=F', 'SI=F', 'HG=F',
-          '^IXIC', '^GSPC', '^DJI', 'INR=X'
-        ];
+          'CL=F', 'NG=F', 'GC=F', 'SI=F', 'HG=F', 'ZNC=F',
+          '^IXIC', '^GSPC', '^DJI',
+        ].filter(needsFallback);
+        if (symbolsToFetch.length === 0) return;
+        if (symbolsToFetch.some(s => s.endsWith('=F'))) symbolsToFetch.push('INR=X');
 
-        // First attempt to query Angel One SmartAPI Quote REST API if session is active
-        let angelOneQuotesSuccess = false;
-        if (this.apiKey && this.clientCode && this.feedToken && this.feedToken.length > 10) {
-          try {
-            const angelRes = await fetch('https://apiconnect.angelone.in/rest/secure/angelbroking/market/v1/quote', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Accept': 'application/json',
-                'X-UserType': 'USER',
-                'X-SourceID': 'WEB',
-                'X-ClientLocalIP': '127.0.0.1',
-                'X-ClientPublicIP': '127.0.0.1',
-                'X-MACAddress': 'fe80::1',
-                'X-PrivateKey': this.apiKey,
-                'Authorization': `Bearer ${this.feedToken}`,
-              },
-              body: JSON.stringify({
-                mode: 'FULL',
-                exchangeTokens: {
-                  NSE: ['99926000', '99926009', '99926037', '2885', '1333', '1594'],
-                  BSE: ['99919000', '99919012'],
-                  MCX: ['254823', '254830', '254810', '254815'],
-                },
-              }),
-            });
-
-            if (angelRes.ok) {
-              const angelData = await angelRes.json();
-              if (angelData?.status && angelData?.data?.fetched) {
-                const fetchedList: any[] = angelData.data.fetched;
-                const flashes: Record<string, 'UP' | 'DOWN'> = {};
-                fetchedList.forEach((q: any) => {
-                  const entry = Object.entries(EXCHANGE_SYMBOL_MAP).find(([_, m]) => m.token === q.symbolToken);
-                  if (entry) {
-                    const [sym] = entry;
-                    const existing = this.currentTickers.get(sym);
-                    if (existing && q.ltp) {
-                      const newLtp = Number(q.ltp);
-                      const direction = newLtp >= existing.ltp ? 'UP' : 'DOWN';
-                      if (newLtp !== existing.ltp) flashes[sym] = direction;
-                      const change = Number((newLtp - (q.close || existing.close)).toFixed(2));
-                      const changePercent = Number(((change / (q.close || existing.close)) * 100).toFixed(2));
-
-                      this.currentTickers.set(sym, {
-                        ...existing,
-                        ltp: newLtp,
-                        change,
-                        changePercent,
-                        high: Number(q.high || existing.high),
-                        low: Number(q.low || existing.low),
-                        close: Number(q.close || existing.close),
-                        volume: Number(q.tradeVolume || existing.volume),
-                        tickDirection: direction,
-                        lastUpdated: new Date().toISOString(),
-                      });
-                    }
-                  }
-                });
-                this.feedStatus = 'ANGELONE_WS_CONNECTED';
-                this.totalTicks += fetchedList.length;
-                this.notifyListeners(flashes);
-                angelOneQuotesSuccess = true;
-              }
-            }
-          } catch {
-            // Fall through to real exchange live gateway
-          }
-        }
-
-        // Real financial exchange rates poller
         const fetchPromises = symbolsToFetch.map(async (yahooSym) => {
           try {
             const res = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSym)}?interval=1m&range=1d`, {
@@ -264,7 +502,9 @@ export class AngelOneLiveStreamer {
 
         results.forEach((r) => {
           if (!r || r.yahooSym === 'INR=X') return;
-          const matchingEntries = Object.entries(EXCHANGE_SYMBOL_MAP).filter(([_, m]) => m.yahooSymbol === r.yahooSym);
+          const matchingEntries = Object.entries(EXCHANGE_SYMBOL_MAP).filter(
+            ([sym, m]) => m.yahooSymbol === r.yahooSym && !this.isAngelFresh(sym)
+          );
 
           matchingEntries.forEach(([sym, meta]) => {
             const existing = this.currentTickers.get(sym);
@@ -275,48 +515,31 @@ export class AngelOneLiveStreamer {
             let targetHigh = r.high;
             let targetLow = r.low;
 
-            // Accurate MCX Commodity conversion to Indian Rupee according to exchange lot/contract specifications
+            // Approximate MCX rupee prices from international futures (fallback only)
             if (meta.exchange === 'MCX') {
+              let factor = 1;
               if (sym === 'CRUDEOIL' || sym === 'CRUDE OIL' || sym === 'CRUDEOILMINI') {
-                // Crude Oil: USD/bbl * USDINR = MCX ₹/bbl
-                targetPrice = Number((r.price * cachedUsdInr).toFixed(2));
-                targetClose = Number((r.prevClose * cachedUsdInr).toFixed(2));
-                targetHigh = Number((r.high * cachedUsdInr).toFixed(2));
-                targetLow = Number((r.low * cachedUsdInr).toFixed(2));
+                // Crude Oil: USD/bbl * USDINR = ₹/bbl
+                factor = cachedUsdInr;
               } else if (sym === 'NATURALGAS' || sym === 'NATURALGASMINI') {
-                // Natural Gas: USD/mmBtu * USDINR = MCX ₹/mmBtu
-                targetPrice = Number((r.price * cachedUsdInr).toFixed(2));
-                targetClose = Number((r.prevClose * cachedUsdInr).toFixed(2));
-                targetHigh = Number((r.high * cachedUsdInr).toFixed(2));
-                targetLow = Number((r.low * cachedUsdInr).toFixed(2));
+                // Natural Gas: USD/mmBtu * USDINR = ₹/mmBtu
+                factor = cachedUsdInr;
               } else if (sym === 'GOLD' || sym === 'GOLDMINI') {
                 // Gold: USD/troy oz (31.1035g) to ₹/10g with 15% Indian duty & import parity
-                const factor = (cachedUsdInr / 31.1034768) * 10 * 1.15;
-                targetPrice = Number((r.price * factor).toFixed(2));
-                targetClose = Number((r.prevClose * factor).toFixed(2));
-                targetHigh = Number((r.high * factor).toFixed(2));
-                targetLow = Number((r.low * factor).toFixed(2));
+                factor = (cachedUsdInr / 31.1034768) * 10 * 1.15;
               } else if (sym === 'SILVER' || sym === 'SILVERMINI') {
                 // Silver: USD/troy oz to ₹/kg with 15% Indian duty & import parity
-                const factor = (cachedUsdInr / 31.1034768) * 1000 * 1.15;
-                targetPrice = Number((r.price * factor).toFixed(2));
-                targetClose = Number((r.prevClose * factor).toFixed(2));
-                targetHigh = Number((r.high * factor).toFixed(2));
-                targetLow = Number((r.low * factor).toFixed(2));
+                factor = (cachedUsdInr / 31.1034768) * 1000 * 1.15;
               } else if (sym === 'COPPER') {
                 // Copper: USD/lb to ₹/kg (1 lb = 0.453592 kg)
-                const factor = cachedUsdInr / 0.45359237;
-                targetPrice = Number((r.price * factor).toFixed(2));
-                targetClose = Number((r.prevClose * factor).toFixed(2));
-                targetHigh = Number((r.high * factor).toFixed(2));
-                targetLow = Number((r.low * factor).toFixed(2));
+                factor = cachedUsdInr / 0.45359237;
               } else if (sym === 'ZINC') {
-                const factor = (cachedUsdInr / 0.45359237) * 0.35;
-                targetPrice = Number((r.price * factor).toFixed(2));
-                targetClose = Number((r.prevClose * factor).toFixed(2));
-                targetHigh = Number((r.high * factor).toFixed(2));
-                targetLow = Number((r.low * factor).toFixed(2));
+                factor = (cachedUsdInr / 0.45359237) * 0.35;
               }
+              targetPrice = Number((r.price * factor).toFixed(2));
+              targetClose = Number((r.prevClose * factor).toFixed(2));
+              targetHigh = Number((r.high * factor).toFixed(2));
+              targetLow = Number((r.low * factor).toFixed(2));
             }
 
             const direction = targetPrice >= existing.ltp ? 'UP' : 'DOWN';
@@ -344,9 +567,7 @@ export class AngelOneLiveStreamer {
 
         if (updatedCount > 0) {
           this.totalTicks += updatedCount;
-          if (!angelOneQuotesSuccess) {
-            this.feedStatus = 'REAL_EXCHANGE_LIVE';
-          }
+          this.lastYahooTickAt = Date.now();
           this.notifyListeners(flashes);
         }
       } catch (err) {
@@ -359,120 +580,110 @@ export class AngelOneLiveStreamer {
     this.pollingTimer = setInterval(fetchLiveExchangeBatch, 1500);
   }
 
-  // Connect to Angel One SmartAPI WebSocket 2.0
-  public connectAngelOneWebSocket() {
-    if (this.isConnecting) return;
-    this.isConnecting = true;
+  // ---- Angel One SmartAPI WebSocket 2.0 -----------------------------------
 
-    try {
-      // Angel One SmartAPI WebSocket 2.0 Smart-Stream Endpoint
-      const wsUrl = 'wss://smartapisocket.angelone.in/smart-stream';
-      
-      const tokensList = Object.values(EXCHANGE_SYMBOL_MAP).map(m => m.token);
-
-      this.ws = new WebSocket(wsUrl, {
-        headers: {
-          'Authorization': `Bearer ${this.feedToken}`,
-          'x-api-key': this.apiKey,
-          'x-client-code': this.clientCode,
-          'x-feed-token': this.feedToken,
-        },
-      });
-
-      this.ws.on('open', () => {
-        this.isConnecting = false;
-        this.feedStatus = 'ANGELONE_WS_CONNECTED';
-
-        // Subscribe to NSE, BSE, and MCX Tokens in Mode 1 (LTP) or Mode 2 (Quote)
-        const subMsg = {
-          correlationID: 'sharemarket_pro_' + Date.now(),
-          action: 1, // 1 = Subscribe
-          params: {
-            mode: 1, // 1 = LTP, 2 = Quote, 3 = Snapquote
-            tokenList: [
-              {
-                exchangeType: 1, // NSE
-                tokens: ['99926000', '99926009', '99926037', '2885', '1333', '1594', '11536', '3456', '3045', '4963', '10604'],
-              },
-              {
-                exchangeType: 3, // BSE
-                tokens: ['99919000', '99919012'],
-              },
-              {
-                exchangeType: 5, // MCX Commodities
-                tokens: ['MCX_CRUDE', 'MCX_NG', 'MCX_GOLD', 'MCX_SILVER', 'MCX_COPPER', 'MCX_ZINC'],
-              },
-            ],
-          },
-        };
-
-        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-          this.ws.send(JSON.stringify(subMsg));
-        }
-      });
-
-      this.ws.on('message', (data: WebSocket.RawData) => {
-        try {
-          this.totalTicks++;
-          this.feedStatus = 'ANGELONE_WS_CONNECTED';
-
-          // Handle Binary or JSON tick frame from Angel One SmartAPI
-          if (typeof data === 'string' || Buffer.isBuffer(data)) {
-            const rawStr = data.toString('utf-8');
-            if (rawStr.startsWith('{')) {
-              const tick = JSON.parse(rawStr);
-              if (tick && tick.token && tick.last_traded_price) {
-                const price = Number((tick.last_traded_price / 100).toFixed(2));
-                const entry = Object.entries(EXCHANGE_SYMBOL_MAP).find(([_, m]) => m.token === tick.token);
-                if (entry) {
-                  const [sym] = entry;
-                  const existing = this.currentTickers.get(sym);
-                  if (existing) {
-                    const direction = price >= existing.ltp ? 'UP' : 'DOWN';
-                    const change = Number((price - existing.close).toFixed(2));
-                    const changePercent = Number(((change / existing.close) * 100).toFixed(2));
-
-                    this.currentTickers.set(sym, {
-                      ...existing,
-                      ltp: price,
-                      change,
-                      changePercent,
-                      high: Math.max(existing.high, price),
-                      low: Math.min(existing.low, price),
-                      tickDirection: direction,
-                      lastUpdated: new Date().toISOString(),
-                    });
-
-                    this.notifyListeners({ [sym]: direction });
-                  }
-                }
-              }
-            }
-          }
-        } catch {
-          // Binary buffer unpacking or text parsing error
-        }
-      });
-
-      this.ws.on('error', () => {
-        this.isConnecting = false;
-        // Fallback to real exchange feed seamlessly
-        if (this.feedStatus === 'ANGELONE_WS_CONNECTED') {
-          this.feedStatus = 'REAL_EXCHANGE_LIVE';
-        }
-      });
-
-      this.ws.on('close', () => {
-        this.isConnecting = false;
-        if (this.feedStatus === 'ANGELONE_WS_CONNECTED') {
-          this.feedStatus = 'REAL_EXCHANGE_LIVE';
-        }
-        // Auto-reconnect after 8s
-        setTimeout(() => this.connectAngelOneWebSocket(), 8000);
-      });
-    } catch {
-      this.isConnecting = false;
+  private closeWebSocket() {
+    this.wsGeneration++;
+    if (this.wsHeartbeat) clearInterval(this.wsHeartbeat);
+    if (this.wsReconnectTimer) clearTimeout(this.wsReconnectTimer);
+    this.wsHeartbeat = null;
+    this.wsReconnectTimer = null;
+    if (this.ws) {
+      this.ws.removeAllListeners();
+      this.ws.on('error', () => {});
+      try {
+        this.ws.terminate();
+      } catch {
+        // already closed
+      }
+      this.ws = null;
     }
+  }
+
+  public connectAngelOneWebSocket() {
+    this.closeWebSocket();
+    if (!this.hasSession()) return;
+
+    const generation = this.wsGeneration;
+    const ws = new WebSocket(SMART_STREAM_URL, {
+      headers: {
+        'Authorization': `Bearer ${this.jwtToken}`,
+        'x-api-key': this.apiKey,
+        'x-client-code': this.clientCode,
+        'x-feed-token': this.feedToken,
+      },
+    });
+    this.ws = ws;
+
+    ws.on('open', () => {
+      if (generation !== this.wsGeneration) return;
+      this.wsReconnectDelay = 5_000;
+
+      const tokenList = Object.entries(this.angelTokensByExchange()).map(([exchange, tokens]) => ({
+        exchangeType: WS_EXCHANGE_TYPE[exchange as Exchange],
+        tokens,
+      }));
+      ws.send(JSON.stringify({
+        correlationID: 'smpro' + (Date.now() % 100000),
+        action: 1, // Subscribe
+        params: { mode: 2, tokenList }, // 2 = Quote (LTP + OHLC + volume)
+      }));
+      console.log(`[AngelOne WS] connected, subscribed ${tokenList.map(t => `${t.exchangeType}:${t.tokens.length}`).join(' ')}`);
+
+      this.wsHeartbeat = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) ws.send('ping');
+      }, WS_HEARTBEAT_MS);
+    });
+
+    ws.on('message', (data: WebSocket.RawData, isBinary: boolean) => {
+      if (generation !== this.wsGeneration || !isBinary) return; // text frames are 'pong' / errors
+      const buf = Buffer.isBuffer(data) ? data : Buffer.concat(Array.isArray(data) ? data : [Buffer.from(data as ArrayBuffer)]);
+      if (this.handleBinaryTick(buf)) {
+        this.lastWsTickAt = Date.now();
+        this.queueNotify();
+      }
+    });
+
+    ws.on('error', (err: Error) => {
+      if (generation !== this.wsGeneration) return;
+      console.warn('[AngelOne WS] error:', err.message);
+      if (/\b(401|403)\b/.test(err.message)) this.requestSessionRefresh('websocket handshake rejected');
+    });
+
+    ws.on('close', () => {
+      if (generation !== this.wsGeneration) return;
+      if (this.wsHeartbeat) clearInterval(this.wsHeartbeat);
+      this.wsHeartbeat = null;
+      this.ws = null;
+      if (!this.hasSession()) return;
+      const delay = this.wsReconnectDelay;
+      this.wsReconnectDelay = Math.min(this.wsReconnectDelay * 2, 60_000);
+      this.wsReconnectTimer = setTimeout(() => this.connectAngelOneWebSocket(), delay);
+    });
+  }
+
+  // SmartAPI WebSocket 2.0 binary tick (little-endian):
+  //  0 mode | 1 exchange type | 2-26 token (null-padded) | 27 seq | 35 exch ts
+  //  43 LTP (paise) | Quote mode adds: 51 LTQ | 59 ATP | 67 volume |
+  //  75 total buy qty (f64) | 83 total sell qty (f64) | 91 open | 99 high |
+  //  107 low | 115 close  (prices in paise)
+  private handleBinaryTick(buf: Buffer): boolean {
+    if (buf.length < 51) return false;
+    const mode = buf.readInt8(0);
+    const exchange = WS_EXCHANGE_BY_CODE[buf.readInt8(1)];
+    if (!exchange) return false;
+    const token = buf.toString('utf8', 2, 27).split('\0')[0];
+    const paise = (offset: number) => Number(buf.readBigInt64LE(offset)) / 100;
+
+    const update: AngelQuoteUpdate = { ltp: paise(43) };
+    if (mode >= 2 && buf.length >= 123) {
+      update.volume = Number(buf.readBigInt64LE(67));
+      update.open = paise(91);
+      update.high = paise(99);
+      update.low = paise(107);
+      update.close = paise(115);
+    }
+    return this.applyAngelQuote(exchange, token, update);
   }
 
   public subscribe(listener: (tickers: Ticker[], flashes: Record<string, 'UP' | 'DOWN'>) => void) {
@@ -495,16 +706,45 @@ export class AngelOneLiveStreamer {
     return this.currentTickers.get(symbol.toUpperCase());
   }
 
+  private currentFeedStatus(): AngelOneFeedStatus {
+    const now = Date.now();
+    if (now - this.lastWsTickAt < ANGEL_FRESH_MS) return 'ANGELONE_WS_CONNECTED';
+    if (now - this.lastRestQuoteAt < ANGEL_FRESH_MS) return 'ANGELONE_REST_LIVE';
+    if (now - this.lastYahooTickAt < 60_000) return 'REAL_EXCHANGE_LIVE';
+    return this.hasSession() ? 'CONNECTING' : 'DISCONNECTED';
+  }
+
   public getFeedState(): AngelOneMarketFeedState {
+    const feedStatus = this.currentFeedStatus();
+    const sources: Record<AngelOneFeedStatus, string> = {
+      ANGELONE_WS_CONNECTED: 'Angel One SmartAPI WebSocket 2.0 (Smart-Stream)',
+      ANGELONE_REST_LIVE: 'Angel One SmartAPI Market Quote API',
+      REAL_EXCHANGE_LIVE: 'Yahoo Finance fallback (delayed; MCX estimated from COMEX/NYMEX)',
+      CONNECTING: 'Connecting to Angel One SmartAPI',
+      DISCONNECTED: 'No live feed',
+    };
+    const lastTick = Math.max(this.lastWsTickAt, this.lastRestQuoteAt, this.lastYahooTickAt);
+
     return {
-      connected: this.feedStatus === 'ANGELONE_WS_CONNECTED' || this.feedStatus === 'REAL_EXCHANGE_LIVE',
-      feedStatus: this.feedStatus,
-      lastTickTimestamp: new Date().toISOString(),
-      source: this.feedStatus === 'ANGELONE_WS_CONNECTED' ? 'Angel One SmartAPI WebSocket 2.0 (Smart-Stream)' : 'Real Exchange Live Feed (NSE/BSE Broadcast)',
+      connected: feedStatus === 'ANGELONE_WS_CONNECTED' || feedStatus === 'ANGELONE_REST_LIVE' || feedStatus === 'REAL_EXCHANGE_LIVE',
+      feedStatus,
+      lastTickTimestamp: lastTick ? new Date(lastTick).toISOString() : '',
+      source: sources[feedStatus],
       totalTicksReceived: this.totalTicks,
       activeClientCode: this.clientCode,
-      subscribedTokens: Object.values(EXCHANGE_SYMBOL_MAP).map(m => m.token),
-      latencyMs: this.feedStatus === 'ANGELONE_WS_CONNECTED' ? 12 : 38,
+      subscribedTokens: Array.from(this.tokenIndex.keys()),
+      latencyMs: feedStatus === 'ANGELONE_WS_CONNECTED' ? 12 : 38,
+      sessionActive: this.hasSession(),
+      mcxContracts: Object.entries(EXCHANGE_SYMBOL_MAP)
+        .filter(([, m]) => m.angelName)
+        .map(([sym, m]) => ({
+          symbol: sym,
+          angelName: m.angelName!,
+          token: m.token,
+          tradingSymbol: m.tradingSymbol || '',
+          expiry: m.expiry || '',
+          lastAngelTick: this.angelLiveAt.has(sym) ? new Date(this.angelLiveAt.get(sym)!).toISOString() : null,
+        })),
     };
   }
 }

@@ -560,12 +560,18 @@ export const Watchlist: React.FC<WatchlistProps> = ({ onQuickOrder, onClose, ful
         <div className="mb-2 px-2 py-1.5 rounded-lg bg-slate-900/95 border border-emerald-900/50 flex items-center justify-between text-[10px] font-mono shadow-inner">
           <div className="flex items-center gap-1.5 text-slate-300">
             <span className="relative flex h-2 w-2">
-              <span className={`animate-ping absolute inline-flex h-full w-full rounded-full ${feedStatus === 'ANGELONE_WS_CONNECTED' ? 'bg-emerald-400' : 'bg-cyan-400'} opacity-75`}></span>
-              <span className={`relative inline-flex rounded-full h-2 w-2 ${feedStatus === 'ANGELONE_WS_CONNECTED' ? 'bg-emerald-500' : 'bg-cyan-500'}`}></span>
+              <span className={`animate-ping absolute inline-flex h-full w-full rounded-full ${feedStatus.startsWith('ANGELONE') ? 'bg-emerald-400' : 'bg-cyan-400'} opacity-75`}></span>
+              <span className={`relative inline-flex rounded-full h-2 w-2 ${feedStatus.startsWith('ANGELONE') ? 'bg-emerald-500' : 'bg-cyan-500'}`}></span>
             </span>
             <div className="flex flex-col">
               <span className="text-emerald-400 font-bold flex items-center gap-1">
-                {feedStatus === 'ANGELONE_WS_CONNECTED' ? 'Angel One SmartAPI WebSocket: LIVE' : 'Real Exchange Feed: LIVE'}
+                {feedStatus === 'ANGELONE_WS_CONNECTED'
+                  ? 'Angel One SmartAPI WebSocket: LIVE'
+                  : feedStatus === 'ANGELONE_REST_LIVE'
+                    ? 'Angel One SmartAPI Quotes: LIVE'
+                    : feedStatus === 'REAL_EXCHANGE_LIVE'
+                      ? 'Fallback Feed (Yahoo): DELAYED'
+                      : 'Connecting to live feed…'}
               </span>
               <span className="text-[9px] text-slate-400 truncate max-w-[170px]">{feedSource}</span>
             </div>

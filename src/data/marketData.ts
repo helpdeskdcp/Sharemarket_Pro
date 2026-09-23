@@ -895,127 +895,6 @@ export const INITIAL_TICKERS: Ticker[] = [
   }
 ];
 
-// Helper to generate simulated F&O Option Chain for any index or stock
-export function generateOptionChain(underlyingSymbol: string, currentPrice: number): OptionChainData {
-  let step = 50;
-  if (underlyingSymbol === 'BANKNIFTY' || underlyingSymbol === 'BANKEX') step = 100;
-  else if (underlyingSymbol === 'SENSEX' || underlyingSymbol === 'NIFTY NEXT 50') step = 100;
-  else if (underlyingSymbol === 'MIDCPNIFTY') step = 25;
-  else if (underlyingSymbol === 'FINNIFTY') step = 50;
-  else if (underlyingSymbol === 'NATURALGAS' || underlyingSymbol === 'NATURALGASMINI') step = 5;
-  else if (underlyingSymbol === 'CRUDEOIL' || underlyingSymbol === 'CRUDEOILMINI') step = 50;
-  else if (underlyingSymbol === 'GOLD' || underlyingSymbol === 'GOLDMINI') step = 100;
-  else if (underlyingSymbol === 'SILVER' || underlyingSymbol === 'SILVERMINI') step = 250;
-  else if (underlyingSymbol === 'COPPER') step = 10;
-  else if (underlyingSymbol === 'ZINC') step = 5;
-  else if (underlyingSymbol === 'NIFTY IT' || underlyingSymbol === 'NIFTY AUTO' || underlyingSymbol === 'NIFTY FMCG' || underlyingSymbol === 'NIFTY ENERGY') step = 100;
-  else if (currentPrice > 10000) step = 100;
-  else if (currentPrice > 2000) step = 20;
-  else if (currentPrice > 500) step = 10;
-  else step = 5;
-
-  const atm = Math.round(currentPrice / step) * step;
-  const strikeCount = 13; // 6 ITM, ATM, 6 OTM
-  const strikes: OptionStrike[] = [];
-
-  let totalCallOI = 0;
-  let totalPutOI = 0;
-  let highestCallOI = 0;
-  let highestCallOIStrike = atm + (step * 3);
-  let highestPutOI = 0;
-  let highestPutOIStrike = atm - (step * 3);
-
-  for (let i = -6; i <= 6; i++) {
-    const strike = atm + (i * step);
-    const diff = strike - currentPrice;
-
-    // Black-Scholes rough approximations for IV and Greeks
-    const iv = Math.max(10.5, 14.2 + (Math.abs(diff) / step) * 0.35);
-    
-    // Call side
-    const callIntrinsic = Math.max(0, currentPrice - strike);
-    const timeValCall = Math.max(8, (step * 2.2) * Math.exp(-Math.pow(diff / (step * 3.5), 2)));
-    const callLtp = Number((callIntrinsic + timeValCall).toFixed(2));
-    const callDelta = Number(Math.max(0.05, Math.min(0.95, 0.5 - (diff / (step * 8)))).toFixed(2));
-    const callOI = Math.round(1800000 + Math.sin(strike) * 900000 + (diff > 0 ? 800000 : 200000));
-    const callOIChange = Math.round((Math.random() * 200000) - 60000);
-    const callVol = Math.round(callOI * 0.45);
-
-    // Put side
-    const putIntrinsic = Math.max(0, strike - currentPrice);
-    const timeValPut = Math.max(8, (step * 2.2) * Math.exp(-Math.pow(diff / (step * 3.5), 2)));
-    const putLtp = Number((putIntrinsic + timeValPut).toFixed(2));
-    const putDelta = Number(-Math.max(0.05, Math.min(0.95, 0.5 + (diff / (step * 8)))).toFixed(2));
-    const putOI = Math.round(1700000 + Math.cos(strike) * 850000 + (diff < 0 ? 950000 : 250000));
-    const putOIChange = Math.round((Math.random() * 190000) - 50000);
-    const putVol = Math.round(putOI * 0.48);
-
-    totalCallOI += callOI;
-    totalPutOI += putOI;
-
-    if (callOI > highestCallOI) {
-      highestCallOI = callOI;
-      highestCallOIStrike = strike;
-    }
-    if (putOI > highestPutOI) {
-      highestPutOI = putOI;
-      highestPutOIStrike = strike;
-    }
-
-    strikes.push({
-      strikePrice: strike,
-      call: {
-        ltp: callLtp,
-        change: Number((callLtp * 0.04 * (currentPrice > strike ? 1 : -1)).toFixed(2)),
-        changePercent: Number((Math.random() * 12 - 4).toFixed(2)),
-        oi: callOI,
-        oiChange: callOIChange,
-        volume: callVol,
-        iv: Number(iv.toFixed(1)),
-        delta: callDelta,
-        theta: -Number((8.5 + Math.random() * 4).toFixed(2)),
-        gamma: 0.0018,
-        vega: 12.4,
-        bid: Number((callLtp - 0.4).toFixed(2)),
-        ask: Number((callLtp + 0.4).toFixed(2)),
-      },
-      put: {
-        ltp: putLtp,
-        change: Number((putLtp * 0.04 * (currentPrice < strike ? 1 : -1)).toFixed(2)),
-        changePercent: Number((Math.random() * 12 - 6).toFixed(2)),
-        oi: putOI,
-        oiChange: putOIChange,
-        volume: putVol,
-        iv: Number((iv + 0.4).toFixed(1)),
-        delta: putDelta,
-        theta: -Number((8.2 + Math.random() * 4).toFixed(2)),
-        gamma: 0.0018,
-        vega: 12.2,
-        bid: Number((putLtp - 0.4).toFixed(2)),
-        ask: Number((putLtp + 0.4).toFixed(2)),
-      }
-    });
-  }
-
-  const pcr = Number((totalPutOI / (totalCallOI || 1)).toFixed(2));
-  const maxPain = atm;
-
-  return {
-    underlyingSymbol,
-    underlyingPrice: currentPrice,
-    expiryDates: ['Current Weekly (26-SEP-2024)', 'Next Weekly (03-OCT-2024)', 'Monthly (31-OCT-2024)'],
-    selectedExpiry: 'Current Weekly (26-SEP-2024)',
-    strikes,
-    pcr,
-    maxPain,
-    totalCallOI,
-    totalPutOI,
-    highestCallOIStrike,
-    highestPutOIStrike,
-    atmStrike: atm,
-  };
-}
-
 // Generate realistic historical candle data with technical indicators
 export function generateCandleHistory(basePrice: number, points: number = 60, timeframe: string = '1D'): HistoricalCandle[] {
   const candles: HistoricalCandle[] = [];
@@ -1312,13 +1191,20 @@ export const INITIAL_GTT_ORDERS = [
 ];
 
 export const DEFAULT_WEBHOOK_SETTINGS = {
+  // Fail-closed by default: the previous default here was a fake demo
+  // bot token with enabled/autoBroadcastSignals both true, which made the
+  // server attempt (and fail) a real Telegram API call on every trading
+  // signal out of the box -- see the "Telegram API rejected message:
+  // Unauthorized" errors in server.log. Configure a real bot token via
+  // the (now admin-token-protected) Developer Settings panel, then
+  // enable broadcasting there.
   telegram: {
-    enabled: true,
-    botToken: '6891238491:AAH8kqZ_DemoTelegramBotToken_TradingPro',
+    enabled: false,
+    botToken: '',
     chatId: '@chanakya_signals',
     channelName: 'Chanakya Pro VIP Broadcast',
-    isConnected: true,
-    autoBroadcastSignals: true,
+    isConnected: false,
+    autoBroadcastSignals: false,
     broadcastBreakouts: true,
     broadcastReversals: true,
     broadcastTargetUpdates: true,

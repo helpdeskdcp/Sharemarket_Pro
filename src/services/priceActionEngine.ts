@@ -701,10 +701,15 @@ export const INITIAL_PRICE_ACTION_SIGNALS: PriceActionSignal[] = [
   },
 ];
 
+// Trade statuses of a signal whose option position is still open.
+export const OPEN_TRADE_STATUSES: SignalTradeStatus[] = ['ACTIVE', 'TARGET_1_HIT', 'TARGET_2_HIT'];
+
 // Chanakya Pro Analysis & Signal Generator Class
 export class PriceActionStrategyEngine {
   private static instance: PriceActionStrategyEngine;
-  private signals: PriceActionSignal[] = [...INITIAL_PRICE_ACTION_SIGNALS];
+  // Only real signals from the live engine (liveSignalEngine.ts). The
+  // INITIAL_PRICE_ACTION_SIGNALS samples are never loaded here.
+  private signals: PriceActionSignal[] = [];
   private profiles: Record<string, IndexEdgeProfile> = { ...DEFAULT_INDEX_PROFILES };
 
   private constructor() {}
@@ -714,6 +719,22 @@ export class PriceActionStrategyEngine {
       PriceActionStrategyEngine.instance = new PriceActionStrategyEngine();
     }
     return PriceActionStrategyEngine.instance;
+  }
+
+  public addSignal(signal: PriceActionSignal) {
+    this.signals.unshift(signal);
+  }
+
+  public loadSignals(signals: PriceActionSignal[]) {
+    this.signals = [...signals].sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+  }
+
+  public getSignalById(id: string): PriceActionSignal | undefined {
+    return this.signals.find(s => s.id === id);
+  }
+
+  public getOpenSignals(): PriceActionSignal[] {
+    return this.signals.filter(s => OPEN_TRADE_STATUSES.includes(s.tradeStatus));
   }
 
   public getSignals(filterIndex?: string): PriceActionSignal[] {
@@ -752,12 +773,14 @@ export class PriceActionStrategyEngine {
     const confirmed = list.filter(s => s.confirmationStatus !== 'FAKEOUT_FILTERED' && s.confirmationStatus !== 'TRAP_AVOIDED');
     const fakeoutsAvoided = list.filter(s => s.confirmationStatus === 'FAKEOUT_FILTERED' || s.confirmationStatus === 'TRAP_AVOIDED');
     
-    const winningTrades = confirmed.filter(s => s.pointsCaptured > 0);
-    const losingTrades = confirmed.filter(s => s.tradeStatus === 'STOPLOSS_HIT' || s.pointsCaptured < 0);
-    const activeTrades = confirmed.filter(s => s.tradeStatus === 'ACTIVE');
+    // Open trades are neither wins nor losses until they close.
+    const closed = confirmed.filter(s => !OPEN_TRADE_STATUSES.includes(s.tradeStatus));
+    const winningTrades = closed.filter(s => s.pointsCaptured > 0);
+    const losingTrades = closed.filter(s => s.pointsCaptured < 0);
+    const activeTrades = confirmed.filter(s => OPEN_TRADE_STATUSES.includes(s.tradeStatus));
 
     const totalPointsWon = winningTrades.reduce((sum, s) => sum + s.pointsCaptured, 0);
-    const totalPointsLost = losingTrades.reduce((sum, s) => sum + Math.abs(s.pointsCaptured || s.optionStopLossPoints), 0);
+    const totalPointsLost = losingTrades.reduce((sum, s) => sum + Math.abs(s.pointsCaptured), 0);
     const netPoints = Number((totalPointsWon - totalPointsLost).toFixed(2));
 
     const winRate = confirmed.length > 0
@@ -766,7 +789,7 @@ export class PriceActionStrategyEngine {
 
     const profitFactor = totalPointsLost > 0
       ? Number((totalPointsWon / totalPointsLost).toFixed(2))
-      : Number((totalPointsWon > 0 ? 5.0 : 1.0).toFixed(2));
+      : 0; // undefined until at least one losing trade has closed
 
     return {
       totalSignals: list.length,
@@ -783,194 +806,6 @@ export class PriceActionStrategyEngine {
       avgWinPoints: winningTrades.length > 0 ? Number((totalPointsWon / winningTrades.length).toFixed(1)) : 0,
       avgLossPoints: losingTrades.length > 0 ? Number((totalPointsLost / losingTrades.length).toFixed(1)) : 0,
     };
-  }
-
-  // Process live market tick to check for S/R breakouts & reversals
-  public evaluateLiveCandle(
-    indexSymbol: string,
-    currentPrice: number,
-    candle: { open: number; high: number; low: number; close: number; volume: number; avgVolume: number }
-  ): PriceActionSignal | null {
-    const profile = this.getProfile(indexSymbol);
-    const candleRange = Math.max(1, candle.high - candle.low);
-    const upperWick = candle.high - Math.max(candle.open, candle.close);
-    const lowerWick = Math.min(candle.open, candle.close) - candle.low;
-    const upperWickPercent = (upperWick / candleRange) * 100;
-    const lowerWickPercent = (lowerWick / candleRange) * 100;
-    const volumeMultiplier = Number((candle.volume / Math.max(1, candle.avgVolume)).toFixed(2));
-
-    // Check count of today's signals for this index (Limit to 1-4 quality setups per day)
-    const todaySignals = this.signals.filter(s => s.indexSymbol === indexSymbol);
-    if (todaySignals.length >= profile.dailySignalLimit) {
-      return null;
-    }
-
-    // 1. Check Resistance Breakout vs Fakeout
-    const nearbyResistance = profile.resistanceLevels.find(r => Math.abs(currentPrice - r) <= profile.typicalAtr * 0.4);
-    if (nearbyResistance && candle.high > nearbyResistance) {
-      const isBodyClosedAbove = candle.close > nearbyResistance;
-      const isVolumeConfirmed = volumeMultiplier >= profile.breakoutVolumeThreshold;
-      const isCleanBreakout = isBodyClosedAbove && isVolumeConfirmed && upperWickPercent < 35;
-
-      // Select ATM strike for CE
-      const strikePrice = Math.round(currentPrice / profile.strikeStep) * profile.strikeStep;
-      const approxEntry = Number((currentPrice * 0.006 * 10).toFixed(1)); // Approx delta 0.55
-      const slPoints = Number((profile.typicalAtr * 0.18).toFixed(1));
-      const slPrice = Number((approxEntry - slPoints).toFixed(1));
-
-      if (isCleanBreakout) {
-        // Confirmed Breakout Signal
-        const optimalMult = parseFloat(profile.calibratedOptimalTargetRatio.replace('1:', '')) || 1.8;
-        const newSig: PriceActionSignal = {
-          id: `SIG-${indexSymbol.replace(/\s+/g, '')}-${Date.now().toString().slice(-4)}`,
-          timestamp: new Date().toISOString(),
-          timeFormatted: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
-          indexSymbol,
-          underlyingSpot: currentPrice,
-          patternType: 'RESISTANCE_BREAKOUT',
-          bias: 'BULLISH',
-          action: 'BUY',
-          optionType: 'CE',
-          strikePrice,
-          optionSymbol: `${indexSymbol} ${strikePrice} CE`,
-          optionEntryPrice: approxEntry,
-          optionStopLoss: slPrice,
-          optionStopLossPoints: slPoints,
-          target1: { price: Number((approxEntry + slPoints * 2).toFixed(1)), ratio: '1:2', points: slPoints * 2, hit: false },
-          target2: { price: Number((approxEntry + slPoints * 3).toFixed(1)), ratio: '1:3', points: slPoints * 3, hit: false },
-          target4: { price: Number((approxEntry + slPoints * 4).toFixed(1)), ratio: '1:4', points: slPoints * 4, hit: false },
-          adaptiveTarget: {
-            price: Number((approxEntry + slPoints * optimalMult).toFixed(1)),
-            ratio: profile.calibratedOptimalTargetRatio,
-            points: Number((slPoints * optimalMult).toFixed(1)),
-            probabilityPercent: profile.calibratedProbabilityPercent,
-            optimalRatioMultiplier: optimalMult,
-            reason: `${indexSymbol} profile indicates ${profile.calibratedProbabilityPercent}% probability edge at ${profile.calibratedOptimalTargetRatio}.`,
-            hit: false,
-          },
-          confirmationStatus: 'CONFIRMED_BREAKOUT',
-          tradeStatus: 'ACTIVE',
-          currentOptionPrice: approxEntry,
-          pointsCaptured: 0,
-          maxPointsReached: 0,
-          pnlPercent: 0,
-          confidenceScore: Number((85 + Math.random() * 8).toFixed(1)),
-          daySignalNumber: todaySignals.length + 1,
-          keyLevel: nearbyResistance,
-          volumeMultiplier,
-          rejectionWickPercent: upperWickPercent,
-          rationale: `Confirmed high-volume expansion breakout above ${nearbyResistance.toLocaleString('en-IN')} with ${volumeMultiplier}x volume.`,
-          marathiRationale: `${nearbyResistance.toLocaleString('en-IN')} वरील रेझिस्टन्स ब्रेकआउट ${volumeMultiplier}x व्हॉल्यूमसह कन्फर्म झाला.`,
-        };
-        this.signals.unshift(newSig);
-        return newSig;
-      } else if (upperWickPercent >= profile.minWickRejectionPercent || volumeMultiplier < 0.85) {
-        // Detected Fakeout Trap
-        const fakeoutSig: PriceActionSignal = {
-          id: `TRAP-${indexSymbol.replace(/\s+/g, '')}-${Date.now().toString().slice(-4)}`,
-          timestamp: new Date().toISOString(),
-          timeFormatted: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
-          indexSymbol,
-          underlyingSpot: currentPrice,
-          patternType: 'RESISTANCE_BREAKOUT',
-          bias: 'BULLISH',
-          action: 'BUY',
-          optionType: 'CE',
-          strikePrice,
-          optionSymbol: `${indexSymbol} ${strikePrice} CE`,
-          optionEntryPrice: approxEntry,
-          optionStopLoss: slPrice,
-          optionStopLossPoints: slPoints,
-          target1: { price: Number((approxEntry + slPoints * 2).toFixed(1)), ratio: '1:2', points: slPoints * 2, hit: false },
-          target2: { price: Number((approxEntry + slPoints * 3).toFixed(1)), ratio: '1:3', points: slPoints * 3, hit: false },
-          target4: { price: Number((approxEntry + slPoints * 4).toFixed(1)), ratio: '1:4', points: slPoints * 4, hit: false },
-          adaptiveTarget: {
-            price: Number((approxEntry + slPoints * 1.8).toFixed(1)),
-            ratio: '1:1.8',
-            points: Number((slPoints * 1.8).toFixed(1)),
-            probabilityPercent: 0,
-            optimalRatioMultiplier: 1.8,
-            reason: 'Fakeout filtered out: High rejection wick / low volume liquidity trap.',
-            hit: false,
-          },
-          confirmationStatus: 'FAKEOUT_FILTERED',
-          tradeStatus: 'FILTERED_OUT',
-          currentOptionPrice: approxEntry,
-          pointsCaptured: 0,
-          maxPointsReached: 0,
-          pnlPercent: 0,
-          confidenceScore: 92.0,
-          daySignalNumber: 0,
-          keyLevel: nearbyResistance,
-          volumeMultiplier,
-          rejectionWickPercent: upperWickPercent,
-          trapDetails: `🛡️ FAKEOUT FILTERED: Level ${nearbyResistance} saw ${upperWickPercent.toFixed(1)}% upper wick rejection on ${volumeMultiplier}x volume. Fake breakout avoided!`,
-          rationale: `Liquidity sweep fakeout at ${nearbyResistance}. Prevented false CE entry.`,
-          marathiRationale: `🛡️ फेक ब्रेकआउट फिल्टर: ${nearbyResistance} वर ${upperWickPercent.toFixed(1)}% रिजेक्शन विक आली. खोटा ट्रेड रोखला.`,
-        };
-        this.signals.unshift(fakeoutSig);
-        return fakeoutSig;
-      }
-    }
-
-    // 2. Check Support Reversal vs Breakdown
-    const nearbySupport = profile.supportLevels.find(s => Math.abs(currentPrice - s) <= profile.typicalAtr * 0.4);
-    if (nearbySupport && candle.low <= nearbySupport) {
-      const isRejectionConfirmed = lowerWickPercent >= profile.minWickRejectionPercent;
-      const strikePrice = Math.round(currentPrice / profile.strikeStep) * profile.strikeStep;
-      const approxEntry = Number((currentPrice * 0.0055 * 10).toFixed(1));
-      const slPoints = Number((profile.typicalAtr * 0.16).toFixed(1));
-      const slPrice = Number((approxEntry - slPoints).toFixed(1));
-
-      if (isRejectionConfirmed && candle.close > nearbySupport) {
-        const optimalMult = parseFloat(profile.calibratedOptimalTargetRatio.replace('1:', '')) || 1.8;
-        const newSig: PriceActionSignal = {
-          id: `SIG-${indexSymbol.replace(/\s+/g, '')}-${Date.now().toString().slice(-4)}`,
-          timestamp: new Date().toISOString(),
-          timeFormatted: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
-          indexSymbol,
-          underlyingSpot: currentPrice,
-          patternType: 'SUPPORT_REVERSAL',
-          bias: 'BULLISH',
-          action: 'BUY',
-          optionType: 'CE',
-          strikePrice,
-          optionSymbol: `${indexSymbol} ${strikePrice} CE`,
-          optionEntryPrice: approxEntry,
-          optionStopLoss: slPrice,
-          optionStopLossPoints: slPoints,
-          target1: { price: Number((approxEntry + slPoints * 2).toFixed(1)), ratio: '1:2', points: slPoints * 2, hit: false },
-          target2: { price: Number((approxEntry + slPoints * 3).toFixed(1)), ratio: '1:3', points: slPoints * 3, hit: false },
-          target4: { price: Number((approxEntry + slPoints * 4).toFixed(1)), ratio: '1:4', points: slPoints * 4, hit: false },
-          adaptiveTarget: {
-            price: Number((approxEntry + slPoints * optimalMult).toFixed(1)),
-            ratio: profile.calibratedOptimalTargetRatio,
-            points: Number((slPoints * optimalMult).toFixed(1)),
-            probabilityPercent: profile.calibratedProbabilityPercent,
-            optimalRatioMultiplier: optimalMult,
-            reason: `Calibrated support defense edge with ${lowerWickPercent.toFixed(1)}% rejection wick.`,
-            hit: false,
-          },
-          confirmationStatus: 'CONFIRMED_REVERSAL',
-          tradeStatus: 'ACTIVE',
-          currentOptionPrice: approxEntry,
-          pointsCaptured: 0,
-          maxPointsReached: 0,
-          pnlPercent: 0,
-          confidenceScore: Number((84 + Math.random() * 8).toFixed(1)),
-          daySignalNumber: todaySignals.length + 1,
-          keyLevel: nearbySupport,
-          volumeMultiplier,
-          rejectionWickPercent: lowerWickPercent,
-          rationale: `Confirmed support reversal bounce off ${nearbySupport.toLocaleString('en-IN')} with ${lowerWickPercent.toFixed(1)}% pin-bar wick.`,
-          marathiRationale: `${nearbySupport.toLocaleString('en-IN')} च्या मुख्य सपोर्टवरून ${lowerWickPercent.toFixed(1)}% रिजेक्शन विकसह रिव्हर्सल कन्फर्म झाले.`,
-        };
-        this.signals.unshift(newSig);
-        return newSig;
-      }
-    }
-
-    return null;
   }
 
   // Backtest Historical Data & Edge Finding Calibration Simulator

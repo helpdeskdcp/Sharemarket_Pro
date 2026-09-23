@@ -445,13 +445,6 @@ export const MarketSentimentGauge: React.FC<MarketSentimentGaugeProps> = ({
           {/* Quantitative Metrics Grid */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
             <div className="p-2 rounded-lg bg-[#090e1b] border border-slate-800">
-              <span className="text-slate-500 text-[10px] block">AI Win Prob.</span>
-              <span className="font-extrabold text-emerald-400 text-sm">
-                {activeStrategy.winProbabilityPercent}%
-              </span>
-            </div>
-
-            <div className="p-2 rounded-lg bg-[#090e1b] border border-slate-800">
               <span className="text-slate-500 text-[10px] block">Risk-Reward</span>
               <span className="font-extrabold text-slate-200 text-sm">
                 {activeStrategy.riskRewardRatio}
