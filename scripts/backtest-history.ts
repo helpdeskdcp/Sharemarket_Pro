@@ -6,16 +6,19 @@
 // windows and the trade management are exactly the live engine's.
 // Results are in R on the underlying (no option premium, theta or spread).
 //
-// Usage: npx tsx scripts/backtest-history.ts <csv> <symbol> [NSE|MCX]
+// Usage: npx tsx scripts/backtest-history.ts <csv> <symbol> [NSE|MCX] [--with-volume]
 import fs from 'fs';
 import { AngelCandle } from '../src/services/angelOneApi';
 import { DEFAULT_INDEX_PROFILES } from '../src/services/priceActionEngine';
 import { RuleSet, RULES_V1, RULES_V2, SignalMarket } from '../src/services/signalRules';
 import { formatStats, replayCandles, Trade, tradeStats } from './backtest-lib';
 
-const [csvPath, symbol = 'NIFTY 50', marketArg = 'NSE'] = process.argv.slice(2);
+const args = process.argv.slice(2).filter(a => !a.startsWith('--'));
+// --with-volume: the data has real volume (futures), so run the exact live rules
+const WITH_VOLUME = process.argv.includes('--with-volume');
+const [csvPath, symbol = 'NIFTY 50', marketArg = 'NSE'] = args;
 if (!csvPath) {
-  console.log('usage: npx tsx scripts/backtest-history.ts <csv> <symbol> [NSE|MCX]');
+  console.log('usage: npx tsx scripts/backtest-history.ts <csv> <symbol> [NSE|MCX] [--with-volume]');
   process.exit(1);
 }
 const market = marketArg as SignalMarket;
@@ -44,16 +47,18 @@ for (const line of lines.slice(1)) {
 candles.sort((a, b) => a.ts - b.ts);
 const days = new Set(candles.map(c => c.dateKey)).size;
 console.log(`${symbol}: ${candles.length} candles, ${days} sessions, ${candles[0].dateKey} to ${candles[candles.length - 1].dateKey}`);
-console.log('Volume rules OFF (no volume in index data); all other v1/v2 rules and trade management as live.\n');
+console.log(WITH_VOLUME
+  ? 'Volume rules ON (futures volume): exact live v1/v2 rules and trade management.\n'
+  : 'Volume rules OFF (no volume in index data); all other v1/v2 rules and trade management as live.\n');
 
 // ---- run both rule sets ----------------------------------------------------
-const noVolume = (r: RuleSet): RuleSet => ({ ...r, name: `${r.name} (no volume rules)`, minMedianVolume: 0 });
+const noVolume = (r: RuleSet): RuleSet => (WITH_VOLUME ? r : { ...r, name: `${r.name} (no volume rules)`, minMedianVolume: 0 });
 const profile = DEFAULT_INDEX_PROFILES[symbol] || DEFAULT_INDEX_PROFILES['NIFTY 50'];
 const results: Record<string, Trade[]> = {};
 for (const rules of [noVolume(RULES_V1), noVolume(RULES_V2)]) {
   results[rules.name] = replayCandles(symbol, market, candles, rules, {
     dailyLimit: profile.dailySignalLimit,
-    volumeThreshold: 0,
+    volumeThreshold: WITH_VOLUME ? profile.breakoutVolumeThreshold : 0,
     warmupCandles: 150,
   });
 }
