@@ -162,8 +162,8 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
   ]);
   const [tickFlashMap, setTickFlashMap] = useState<Record<string, 'UP' | 'DOWN' | null>>({});
   const [lastTickTime, setLastTickTime] = useState<number>(Date.now());
-  const [feedSource, setFeedSource] = useState<string>('Angel One SmartAPI WebSocket 2.0 (Smart-Stream)');
-  const [feedStatus, setFeedStatus] = useState<string>('ANGELONE_WS_CONNECTED');
+  const [feedSource, setFeedSource] = useState<string>('Connecting to live feed');
+  const [feedStatus, setFeedStatus] = useState<string>('CONNECTING');
 
   // Portfolio State
   const [cashBalance, setCashBalance] = useState<number>(245800.50);
@@ -512,10 +512,6 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsUrl = `${protocol}//${window.location.host}/api/market/ws`;
         ws = new WebSocket(wsUrl);
-
-        ws.onopen = () => {
-          setFeedStatus('ANGELONE_WS_CONNECTED');
-        };
 
         ws.onmessage = (event) => {
           try {

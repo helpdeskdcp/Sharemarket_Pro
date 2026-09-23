@@ -9,7 +9,7 @@ import crypto from 'crypto';
 import { generateOptionChain, generateCandleHistory, WORLD_CLASS_STRATEGIES, DEFAULT_WEBHOOK_SETTINGS, DEFAULT_ENGINE_SETTINGS } from './src/data/marketData';
 import { AuditLog, DeveloperSettings, GttOrder, BacktestResult, AlertWebhookSettings, Ticker } from './src/types/market';
 import { AngelOneLiveStreamer, EXCHANGE_SYMBOL_MAP } from './src/services/angelOneLiveService';
-import { PriceActionStrategyEngine } from './src/services/priceActionEngine';
+import { PriceActionStrategyEngine, INITIAL_PRICE_ACTION_SIGNALS } from './src/services/priceActionEngine';
 
 dotenv.config();
 
@@ -357,6 +357,116 @@ app.get('/api/market/option-chain', (req: Request, res: Response) => {
   res.json({ success: true, data: optionChain });
 });
 
+// "yyyy-MM-dd HH:mm" in IST, as SmartAPI getCandleData expects
+function formatAngelCandleDate(ms: number): string {
+  return new Date(ms + 5.5 * 60 * 60 * 1000).toISOString().slice(0, 16).replace('T', ' ');
+}
+
+// SmartAPI's historical endpoint allows only a few calls per second per
+// account (shared with any other app on the same account), so calls are
+// queued with spacing and results cached; a failed refresh serves the last
+// good Angel One candles instead of dropping to the Yahoo fallback.
+const angelCandleCache = new Map<string, { at: number; candles: any[] }>();
+let angelCandleQueue: Promise<unknown> = Promise.resolve();
+
+function queueAngelCandleCall<T>(fn: () => Promise<T>): Promise<T> {
+  const run = angelCandleQueue.then(fn, fn);
+  const spacing = () => new Promise(resolve => setTimeout(resolve, 400));
+  angelCandleQueue = run.then(spacing, spacing);
+  return run;
+}
+
+async function fetchAngelOneCandles(symbol: string, timeframe: string): Promise<any[] | null> {
+  const key = `${symbol.toUpperCase()}|${timeframe}|${EXCHANGE_SYMBOL_MAP[symbol.toUpperCase()]?.token || ''}`;
+  const cached = angelCandleCache.get(key);
+  const ttl = timeframe === '1D' || timeframe === '1W' ? 60_000 : 15 * 60_000;
+  if (cached && Date.now() - cached.at < ttl) return cached.candles;
+
+  const candles = await queueAngelCandleCall(() => requestAngelOneCandles(symbol, timeframe));
+  if (candles) {
+    angelCandleCache.set(key, { at: Date.now(), candles });
+    return candles;
+  }
+  return cached && Date.now() - cached.at < 60 * 60_000 ? cached.candles : null;
+}
+
+// Real NSE/BSE/MCX candles from Angel One SmartAPI historical data.
+async function requestAngelOneCandles(symbol: string, timeframe: string): Promise<any[] | null> {
+  const meta = EXCHANGE_SYMBOL_MAP[symbol.toUpperCase()];
+  const auth = angelOneStreamer.getSessionAuth();
+  if (!meta || !auth || !meta.token || !['NSE', 'BSE', 'MCX'].includes(meta.exchange)) return null;
+
+  const day = 24 * 60 * 60 * 1000;
+  const spec: Record<string, { interval: string; days: number; intraday: boolean }> = {
+    '1D': { interval: 'FIVE_MINUTE', days: 4, intraday: true },
+    '1W': { interval: 'FIFTEEN_MINUTE', days: 7, intraday: true },
+    '1M': { interval: 'ONE_DAY', days: 31, intraday: false },
+    '1Y': { interval: 'ONE_DAY', days: 365, intraday: false },
+  };
+  const { interval, days, intraday } = spec[timeframe] || spec['1D'];
+  const now = Date.now();
+
+  try {
+    const request = () => fetch('https://apiconnect.angelone.in/rest/secure/angelbroking/historical/v1/getCandleData', {
+      method: 'POST',
+      headers: angelOneHeaders(auth.apiKey, { 'Authorization': `Bearer ${auth.jwtToken}` }),
+      body: JSON.stringify({
+        exchange: meta.exchange,
+        symboltoken: meta.token,
+        interval,
+        fromdate: formatAngelCandleDate(now - days * day),
+        todate: formatAngelCandleDate(now),
+      }),
+    });
+    let res = await request();
+    if (res.status === 403) {
+      // "exceeding access rate" -- the quota is per account, so back off once
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      res = await request();
+    }
+    if (!res.ok) {
+      console.warn(`[AngelOne] candles ${symbol} ${timeframe} HTTP ${res.status}`);
+      return null;
+    }
+    const json: any = await res.json().catch(() => null);
+    let rows: any[] = Array.isArray(json?.data) ? json.data : [];
+    if (rows.length === 0) return null;
+
+    // 1D shows only the latest session present in the window
+    if (timeframe === '1D') {
+      const lastDate = String(rows[rows.length - 1][0]).slice(0, 10);
+      rows = rows.filter(r => String(r[0]).startsWith(lastDate));
+    }
+
+    const candles = rows.map(([ts, o, h, l, c, v]) => {
+      const d = new Date(ts);
+      return {
+        time: intraday
+          ? d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Kolkata' })
+          : d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', timeZone: 'Asia/Kolkata' }),
+        open: Number(o),
+        high: Number(h),
+        low: Number(l),
+        close: Number(c),
+        volume: Number(v) || 0,
+      };
+    });
+    return candles.length > 5 ? withEma20(candles) : null;
+  } catch {
+    return null;
+  }
+}
+
+function withEma20(candles: any[]): any[] {
+  const k20 = 2 / (20 + 1);
+  let ema20 = candles[0].close;
+  for (let i = 0; i < candles.length; i++) {
+    ema20 = candles[i].close * k20 + ema20 * (1 - k20);
+    candles[i].ema20 = Number(ema20.toFixed(2));
+  }
+  return candles;
+}
+
 // Helper to fetch live candle history from exchange gateways
 async function fetchLiveCandleHistory(symbol: string, timeframe: string): Promise<any[] | null> {
   const meta = EXCHANGE_SYMBOL_MAP[symbol.toUpperCase()];
@@ -430,14 +540,7 @@ async function fetchLiveCandleHistory(symbol: string, timeframe: string): Promis
     }
 
     if (candles.length > 5) {
-      // Calculate 20 EMA
-      const k20 = 2 / (20 + 1);
-      let ema20 = candles[0].close;
-      for (let i = 0; i < candles.length; i++) {
-        ema20 = candles[i].close * k20 + ema20 * (1 - k20);
-        candles[i].ema20 = Number(ema20.toFixed(2));
-      }
-      return candles;
+      return withEma20(candles);
     }
     return null;
   } catch {
@@ -452,14 +555,15 @@ app.get('/api/market/candles', async (req: Request, res: Response) => {
   const points = timeframe === '1D' ? 60 : timeframe === '1W' ? 80 : timeframe === '1M' ? 90 : 120;
   
   const ticker = serverLiveTickers.find(t => t.symbol.toUpperCase() === symbol.toUpperCase()) || serverLiveTickers[0];
-  const liveCandles = await fetchLiveCandleHistory(symbol, timeframe);
+  const angelCandles = await fetchAngelOneCandles(symbol, timeframe);
+  const liveCandles = angelCandles || await fetchLiveCandleHistory(symbol, timeframe);
   const candles = liveCandles || generateCandleHistory(ticker.ltp, points, timeframe);
-  
+
   res.json({
     success: true,
     symbol: ticker.symbol,
     timeframe,
-    source: liveCandles ? 'EXCHANGE_LIVE_HISTORY' : 'QUANT_FALLBACK',
+    source: angelCandles ? 'ANGELONE_HISTORY' : liveCandles ? 'EXCHANGE_LIVE_HISTORY' : 'QUANT_FALLBACK',
     data: candles,
   });
 });
@@ -601,12 +705,20 @@ const ANGEL_ONE_TOKEN_MAP: Record<string, { token: string; exchange: string; nam
   'NASDAQ': { token: 'IXIC', exchange: 'GLOBAL', name: 'Nasdaq Composite' },
   'S&P 500': { token: 'SPX', exchange: 'GLOBAL', name: 'S&P 500 Index' },
   'DOW JONES': { token: 'DJI', exchange: 'GLOBAL', name: 'Dow Jones Industrial' },
-  'CRUDE OIL': { token: 'MCX_CRUDE', exchange: 'MCX', name: 'Crude Oil Futures' },
-  'GOLD': { token: 'MCX_GOLD', exchange: 'MCX', name: 'Gold Futures' },
 };
 
+// MCX tokens roll monthly, so they come from the streamer's resolved
+// nearest-expiry contracts rather than a fixed table.
+function angelOneTokenMeta(symbol: string): { token: string; exchange: string; name: string } | undefined {
+  const live = angelOneStreamer.getInstrument(symbol);
+  if (live && live.exchange === 'MCX' && live.token) {
+    return { token: live.token, exchange: 'MCX', name: live.tradingSymbol || live.name };
+  }
+  return ANGEL_ONE_TOKEN_MAP[symbol.toUpperCase()];
+}
+
 function formatAngelOneQuote(ticker: Ticker) {
-  const meta = ANGEL_ONE_TOKEN_MAP[ticker.symbol.toUpperCase()] || {
+  const meta = angelOneTokenMeta(ticker.symbol) || {
     token: `${Math.floor(1000 + Math.random() * 9000)}`,
     exchange: ticker.exchange || 'NSE',
     name: ticker.name,
@@ -665,7 +777,9 @@ app.post('/api/broker/angelone/market-data/ltp', (req: Request, res: Response) =
 
   if (!ticker) {
     // Check by token
-    const mappedSymbol = Object.keys(ANGEL_ONE_TOKEN_MAP).find(k => ANGEL_ONE_TOKEN_MAP[k].token === query);
+    const mappedSymbol =
+      Object.keys(ANGEL_ONE_TOKEN_MAP).find(k => ANGEL_ONE_TOKEN_MAP[k].token === query) ||
+      Object.keys(EXCHANGE_SYMBOL_MAP).find(k => EXCHANGE_SYMBOL_MAP[k].token === query);
     if (mappedSymbol) {
       ticker = serverLiveTickers.find(t => t.symbol.toUpperCase() === mappedSymbol.toUpperCase());
     }
@@ -799,7 +913,7 @@ app.post('/api/broker/angelone/auth', requireAdmin, async (req: Request, res: Re
   // live streamer so its WebSocket + REST quote polling (angelOneLiveService.ts)
   // start authenticating against Angel One for real instead of falling
   // through to the Yahoo Finance fallback feed.
-  angelOneStreamer.updateCredentials(targetClient, targetKey, feedToken);
+  angelOneStreamer.updateCredentials(targetClient, targetKey, feedToken, sessionJwt);
 
   const margins = feedToken ? await angelOneFetchMargins(sessionJwt, targetKey) : null;
 
@@ -821,6 +935,56 @@ app.post('/api/broker/angelone/auth', requireAdmin, async (req: Request, res: Re
     message: 'Angel One SmartAPI authenticated successfully with MPIN and Auto-generated TOTP!',
   });
 });
+
+// Server-side Angel One session for the shared market feed. Logs in with
+// the .env credentials at startup and every 6 hours (SmartAPI sessions
+// expire daily), and again whenever the feed reports the session rejected.
+// Without this the feed only went live after an admin logged in by hand.
+let angelOneAutoLoginInFlight = false;
+
+async function autoLoginAngelOne(reason: string) {
+  const env = process.env;
+  if (!env.ANGELONE_API_KEY || !env.ANGELONE_CLIENT_CODE || !env.ANGELONE_MPIN || !env.ANGELONE_TOTP_SECRET) {
+    console.log('[AngelOne] auto-login skipped: ANGELONE_API_KEY/CLIENT_CODE/MPIN/TOTP_SECRET not all set');
+    return;
+  }
+  if (angelOneAutoLoginInFlight) return;
+  angelOneAutoLoginInFlight = true;
+
+  const { clientCode, apiKey, mpin, totpSecret } = devSettings.angelOne;
+  try {
+    const totp = new OTPAuth.TOTP({
+      issuer: 'AngelOne',
+      label: clientCode,
+      algorithm: 'SHA1',
+      digits: 6,
+      period: 30,
+      secret: OTPAuth.Secret.fromBase32(totpSecret.replace(/\s+/g, '').toUpperCase()),
+    }).generate();
+
+    const result = await angelOneLogin(clientCode, mpin, totp, apiKey);
+    if (!result.ok || !result.jwtToken || !result.feedToken) {
+      console.warn(`[AngelOne] auto-login (${reason}) failed: ${result.errorcode || ''} ${result.message}`);
+      return;
+    }
+
+    devSettings.angelOne.connected = true;
+    devSettings.angelOne.isLive = true;
+    devSettings.angelOne.lastConnected = new Date().toISOString();
+    devSettings.angelOne.jwtToken = result.jwtToken;
+    devSettings.angelOne.refreshToken = result.refreshToken || '';
+    devSettings.angelOne.feedToken = result.feedToken;
+    angelOneStreamer.updateCredentials(clientCode, apiKey, result.feedToken, result.jwtToken);
+    console.log(`[AngelOne] session established for ${clientCode} (${reason})`);
+  } catch (err: any) {
+    console.warn(`[AngelOne] auto-login (${reason}) error:`, err?.message || err);
+  } finally {
+    angelOneAutoLoginInFlight = false;
+  }
+}
+
+angelOneStreamer.onSessionExpired(() => autoLoginAngelOne('session expired'));
+setInterval(() => autoLoginAngelOne('scheduled refresh'), 6 * 60 * 60 * 1000);
 
 // Developer Settings Config (GET & POST)
 // This endpoint is called automatically for EVERY visitor on app load
@@ -1190,33 +1354,64 @@ async function sendTelegramBroadcast(
   };
 }
 
-function formatPriceActionSignalTelegramHtml(signal: any, channelName?: string): string {
-  const isBuy = signal.action === 'BUY';
-  const signalEmoji = isBuy ? '🟢 🚀' : '🔴 🔻';
-  const actionLabel = isBuy ? 'BUY / LONG CALL' : 'SELL / SHORT PUT';
+// Option-premium trade levels of a PriceActionSignal (src/types/market.ts).
+// Returns null when the signal lacks a real strike/side/entry/SL, so an
+// incomplete signal is never broadcast with ₹0.00 levels.
+const DEMO_SIGNAL_IDS = new Set(INITIAL_PRICE_ACTION_SIGNALS.map(s => s.id));
+const broadcastSignalIds = new Set<string>();
 
-  const cmp = Number(signal.entryPrice || signal.currentPrice || 0).toFixed(2);
-  const sl = Number(signal.stopLoss || 0).toFixed(2);
-  const t1 = signal.targets?.t1 ? Number(signal.targets.t1).toFixed(2) : '-';
-  const t2 = signal.targets?.t2 ? Number(signal.targets.t2).toFixed(2) : '-';
-  const t3 = signal.targets?.t3 ? Number(signal.targets.t3).toFixed(2) : '-';
-  const t4 = signal.targets?.t4 ? Number(signal.targets.t4).toFixed(2) : '-';
+function priceActionSignalLevels(signal: any) {
+  const optionType = signal?.optionType === 'CE' || signal?.optionType === 'PE' ? signal.optionType : null;
+  const strike = Number(signal?.strikePrice);
+  const entry = Number(signal?.optionEntryPrice);
+  const stopLoss = Number(signal?.optionStopLoss);
+  if (!optionType || !(strike > 0) || !(entry > 0) || !(stopLoss > 0) || stopLoss >= entry) return null;
+
+  const target = (t: any) => (t && Number(t.price) > 0 ? { price: Number(t.price), ratio: String(t.ratio || '') } : null);
+  return {
+    indexSymbol: String(signal.indexSymbol || ''),
+    optionType,
+    strike,
+    optionSymbol: String(signal.optionSymbol || `${signal.indexSymbol} ${strike} ${optionType}`),
+    entry,
+    stopLoss,
+    slPoints: Number(signal.optionStopLossPoints) || Number((entry - stopLoss).toFixed(2)),
+    spot: Number(signal.underlyingSpot) || 0,
+    keyLevel: Number(signal.keyLevel) || 0,
+    targets: [
+      ['Target 1', target(signal.target1)],
+      ['Target 2', target(signal.target2)],
+      ['Target 3 (Runner)', target(signal.target4)],
+    ] as [string, { price: number; ratio: string } | null][],
+    adaptive: target(signal.adaptiveTarget),
+    confidence: Number(signal.confidenceScore) || Number(signal.adaptiveTarget?.probabilityPercent) || 0,
+  };
+}
+
+function formatPriceActionSignalTelegramHtml(signal: any, channelName?: string): string {
+  const lv = priceActionSignalLevels(signal)!;
+  const isCall = lv.optionType === 'CE';
+  const signalEmoji = isCall ? '🟢 🚀' : '🔴 🔻';
+  const rupees = (n: number) => `₹${n.toFixed(2)}`;
+  const patternLabel = String(signal.patternType || 'BREAKOUT').replace(/_/g, ' ');
+  const targetLines = lv.targets
+    .filter(([, t]) => t)
+    .map(([label, t]) => `• <b>${label}${t!.ratio ? ` (${t!.ratio})` : ''}:</b> ${rupees(t!.price)}`)
+    .join('\n');
 
   return `
-<b>${signalEmoji} ${actionLabel} - ${signal.indexSymbol || 'NIFTY 50'}</b>
+<b>${signalEmoji} BUY ${lv.optionSymbol}</b>
 ━━━━━━━━━━━━━━━━━━━━━
-🎯 <b>Signal Type:</b> BREAKOUT
-💎 <b>Conviction:</b> ${signal.probabilityPercent || 88}% High Probability
-⚡ <b>Volume Surge:</b> ${signal.volumeMultiplier || 2.4}x vs 20-EMA
+📊 <b>Underlying:</b> ${lv.indexSymbol}${lv.spot ? ` @ ${lv.spot.toFixed(2)}` : ''}
+🎟 <b>Strike:</b> ${lv.strike} ${lv.optionType} (${isCall ? 'Call' : 'Put'})
+🎯 <b>Signal Type:</b> ${patternLabel}${lv.keyLevel ? ` @ ${lv.keyLevel}` : ''}
+💎 <b>Confidence:</b> ${lv.confidence ? `${lv.confidence.toFixed(1)}%` : '-'}
+⚡ <b>Volume:</b> ${signal.volumeMultiplier ? `${signal.volumeMultiplier}x average` : '-'}
 
-<b>📍 TRADE LEVELS (Strict Execution):</b>
-• <b>Entry Trigger:</b> ₹${cmp}
-• <b>Strict Stop Loss (SL):</b> ₹${sl}
-• <b>Target 1 (1:1.5):</b> ₹${t1}
-• <b>Target 2 (1:2.0):</b> ₹${t2}
-• <b>Target 3 (1:3.0):</b> ₹${t3}
-• <b>Target 4 (Runner 1:4.0):</b> ₹${t4}
-• <b>Risk-to-Reward:</b> ${signal.riskRewardRatio || '1:2.5'}
+<b>📍 OPTION PREMIUM LEVELS:</b>
+• <b>Entry:</b> ${rupees(lv.entry)}
+• <b>Stop Loss:</b> ${rupees(lv.stopLoss)} (-${lv.slPoints.toFixed(2)} pts)
+${targetLines}${lv.adaptive ? `\n• <b>Adaptive Target (${lv.adaptive.ratio}):</b> ${rupees(lv.adaptive.price)}` : ''}
 
 💡 <b>Strategy Rationale:</b>
 ${signal.rationale || 'High-volume breakout confirmed across key structural level with clean momentum.'}
@@ -1298,6 +1493,18 @@ app.post('/api/telegram/broadcast-signal', async (req: Request, res: Response) =
   if (!signal) {
     return res.status(400).json({ success: false, error: 'Chanakya Pro signal data required' });
   }
+  // The built-in sample signals (stale prices) must never reach the channel.
+  if (DEMO_SIGNAL_IDS.has(signal.id)) {
+    return res.status(409).json({ success: false, skipped: true, error: 'Demo/sample signal - not broadcast' });
+  }
+  if (!priceActionSignalLevels(signal)) {
+    return res.status(422).json({ success: false, error: 'Signal is missing strike, CE/PE, entry or stop loss - not broadcast' });
+  }
+  // Every open dashboard auto-fires the same signals; send each id once.
+  if (signal.id && broadcastSignalIds.has(signal.id)) {
+    return res.json({ success: true, duplicate: true, message: 'Signal already broadcast' });
+  }
+  if (signal.id) broadcastSignalIds.add(signal.id);
 
   const tgConfig = devSettings.webhooks?.telegram || DEFAULT_WEBHOOK_SETTINGS.telegram;
   const channelName = tgConfig.channelName || 'Chanakya Pro VIP Broadcast';
@@ -1581,7 +1788,7 @@ app.post('/api/broker/angelone/connect-websocket', (req: Request, res: Response,
   const targetKey = apiKey || devSettings.angelOne.apiKey;
   const targetFeed = feedToken || devSettings.angelOne.feedToken;
 
-  angelOneStreamer.updateCredentials(targetClient, targetKey, targetFeed);
+  angelOneStreamer.updateCredentials(targetClient, targetKey, targetFeed, devSettings.angelOne.jwtToken);
 
   auditLogs.unshift({
     id: `log-${Date.now()}`,
@@ -1759,6 +1966,7 @@ async function startServer() {
 
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`ShareMarket Pro trading server with Angel One Live WebSocket running on http://0.0.0.0:${PORT}`);
+    autoLoginAngelOne('startup');
   });
 }
 
