@@ -1440,6 +1440,7 @@ function formatSignalUpdateTelegramHtml(signal: PriceActionSignal, event: Signal
   const pct = (pts / entry) * 100;
   const signed = (n: number, d = 2) => `${n >= 0 ? '+' : ''}${n.toFixed(d)}`;
   const headline: Record<SignalEvent, string> = {
+    BE: '🛡 +1R IN PROFIT - STOP LOSS MOVED TO COST',
     T1: `🎯 TARGET 1 (${signal.target1.ratio}) HIT`,
     T2: `🎯🎯 TARGET 2 (${signal.target2.ratio}) HIT`,
     T4: `🏆 FINAL TARGET (${signal.target4.ratio}) HIT - TRADE CLOSED`,
@@ -1447,7 +1448,8 @@ function formatSignalUpdateTelegramHtml(signal: PriceActionSignal, event: Signal
     SQUARED_OFF: '⏹ SQUARED OFF AT SESSION END - TRADE CLOSED',
   };
   const followUp: Partial<Record<SignalEvent, string>> = {
-    T1: `Stop loss moved to cost ₹${entry.toFixed(2)}.`,
+    BE: `Stop loss moved to cost ₹${entry.toFixed(2)} to protect the trade.`,
+    T1: `Stop loss trailed to ₹${signal.optionStopLoss.toFixed(2)}.`,
     T2: `Stop loss trailed to Target 1 ₹${signal.target1.price.toFixed(2)}.`,
   };
 
