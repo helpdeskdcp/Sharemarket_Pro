@@ -308,7 +308,7 @@ export async function broadcastTargetWinToTelegram(
   try {
     const res = await fetch('/api/telegram/broadcast-target-win', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...adminHeaders() },
       body: JSON.stringify({ winData, customChannel, customBotToken }),
     });
     if (!res.ok) throw new Error(`HTTP error ${res.status}`);

@@ -1,5 +1,6 @@
 import WebSocket from 'ws';
 import { Ticker, Exchange, InstrumentType, MarketDepthItem } from '../types/market';
+import { getInstruments, todayKeyIST, InstrumentRow } from './instrumentMaster';
 
 export type AngelOneFeedStatus =
   | 'ANGELONE_WS_CONNECTED'
@@ -81,7 +82,6 @@ export const EXCHANGE_SYMBOL_MAP: Record<string, SymbolMeta> = {
 
 const SMARTAPI_BASE = 'https://apiconnect.angelone.in';
 const SMART_STREAM_URL = 'wss://smartapisocket.angelone.in/smart-stream';
-const SCRIP_MASTER_URL = 'https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json';
 
 // SmartAPI WebSocket 2.0 exchange type codes
 const WS_EXCHANGE_TYPE: Partial<Record<Exchange, number>> = { NSE: 1, BSE: 3, MCX: 5 };
@@ -104,29 +104,6 @@ interface AngelQuoteUpdate {
   volume?: number;
   bidDepth?: MarketDepthItem[];
   askDepth?: MarketDepthItem[];
-}
-
-interface McxFutureRow {
-  name: string;
-  token: string;
-  symbol: string;
-  expiry: string;
-  expiryKey: number;
-}
-
-// "19OCT2026" -> 20261019
-function expiryToKey(expiry: string): number {
-  const months = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
-  const day = Number(expiry.slice(0, 2));
-  const month = months.indexOf(expiry.slice(2, 5).toUpperCase()) + 1;
-  const year = Number(expiry.slice(5));
-  if (!day || !month || !year) return 0;
-  return year * 10000 + month * 100 + day;
-}
-
-function todayKeyIST(): number {
-  const ist = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
-  return ist.getUTCFullYear() * 10000 + (ist.getUTCMonth() + 1) * 100 + ist.getUTCDate();
 }
 
 function toDepth(levels: any[] | undefined): MarketDepthItem[] | undefined {
@@ -166,8 +143,7 @@ export class AngelOneLiveStreamer {
   private wsReconnectTimer: NodeJS.Timeout | null = null;
   private wsReconnectDelay = 5_000;
 
-  private mcxFutures: McxFutureRow[] = [];
-  private scripMasterFetchedAt = 0;
+  private mcxFutures: InstrumentRow[] = [];
 
   private pendingFlashes: Record<string, 'UP' | 'DOWN'> = {};
   private notifyTimer: NodeJS.Timeout | null = null;
@@ -179,7 +155,7 @@ export class AngelOneLiveStreamer {
     this.startAngelQuotePolling();
     this.refreshMcxContracts();
     // Re-check hourly so contracts roll over on expiry; the instrument
-    // master itself is only re-downloaded about once a day.
+    // master itself is only re-downloaded about once a day (instrumentMaster.ts).
     setInterval(() => this.refreshMcxContracts(), 60 * 60 * 1000);
   }
 
@@ -323,17 +299,10 @@ export class AngelOneLiveStreamer {
 
   private async refreshMcxContracts() {
     try {
-      if (!this.mcxFutures.length || Date.now() - this.scripMasterFetchedAt > 20 * 60 * 60 * 1000) {
-        const res = await fetch(SCRIP_MASTER_URL);
-        if (!res.ok) throw new Error(`instrument master HTTP ${res.status}`);
-        const all: any[] = await res.json();
-        const names = new Set(Object.values(EXCHANGE_SYMBOL_MAP).map(m => m.angelName).filter(Boolean));
-        this.mcxFutures = all
-          .filter(i => i.exch_seg === 'MCX' && i.instrumenttype === 'FUTCOM' && names.has(i.name))
-          .map(i => ({ name: i.name, token: String(i.token), symbol: i.symbol, expiry: i.expiry, expiryKey: expiryToKey(i.expiry) }))
-          .filter(i => i.expiryKey > 0);
-        this.scripMasterFetchedAt = Date.now();
-      }
+      const names = new Set(Object.values(EXCHANGE_SYMBOL_MAP).map(m => m.angelName).filter(Boolean));
+      this.mcxFutures = (await getInstruments()).filter(
+        i => i.exchange === 'MCX' && i.instrumentType === 'FUTCOM' && names.has(i.name)
+      );
       this.applyNearestMcxContracts();
     } catch (err: any) {
       console.warn('[MCX] contract refresh failed:', err?.message || err);

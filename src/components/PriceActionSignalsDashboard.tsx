@@ -75,93 +75,13 @@ export const PriceActionSignalsDashboard: React.FC = () => {
   const [calibrating, setCalibrating] = useState<boolean>(false);
   const [calibrationSuccess, setCalibrationSuccess] = useState<string | null>(null);
 
-  // Auto-Fire Signal Dispatch Tracker & Target Win Tracker
-  const autoFiredSignalIdsRef = React.useRef<Set<string>>(new Set());
-  const autoFiredTargetWinRef = React.useRef<Set<string>>(new Set());
-
-  // Autonomous Signal & Target Win Telegram Broadcaster
-  useEffect(() => {
-    if (webhookSettings.telegram.autoBroadcastSignals && webhookSettings.telegram.enabled && signals.length > 0) {
-      // 1. Auto-broadcast new active signals
-      const pendingSignals = signals.filter(
-        s => s.tradeStatus === 'ACTIVE' && s.patternType !== 'FAKEOUT_TRAP' && !autoFiredSignalIdsRef.current.has(s.id)
-      );
-
-      if (pendingSignals.length > 0) {
-        pendingSignals.forEach(async (sig) => {
-          autoFiredSignalIdsRef.current.add(sig.id);
-          try {
-            await broadcastTelegramSignal(sig);
-            setTelegramBroadcastStatus({
-              id: sig.id,
-              message: `⚡ Auto-Fired ${sig.action} ${sig.indexSymbol} to Telegram (${webhookSettings.telegram.chatId || '@chanakya_pro_signals'})`,
-            });
-            setTimeout(() => setTelegramBroadcastStatus(null), 5000);
-          } catch (e) {
-            console.warn('Auto-fire failed for signal', sig.id, e);
-          }
-        });
-      }
-
-      // 2. Autonomous Target Win Dispatcher
-      signals.forEach(async (sig) => {
-        if (sig.targets?.t1Hit && !autoFiredTargetWinRef.current.has(`${sig.id}-T1`)) {
-          autoFiredTargetWinRef.current.add(`${sig.id}-T1`);
-          try {
-            const ptsWon = Number((sig.targets.t1 - sig.entryPrice).toFixed(2));
-            await broadcastTargetWinToTelegram({
-              indexSymbol: sig.indexSymbol,
-              optionSymbol: sig.optionContract?.tradingSymbol || `${sig.indexSymbol} CALL/PUT`,
-              targetName: 'TARGET 1 REACHED 🎯',
-              pointsWon: Math.abs(ptsWon),
-              entryPrice: sig.entryPrice,
-              exitPrice: sig.targets.t1,
-              pnlPercent: 32.5,
-              ratio: '1:1.5',
-              rationale: `${sig.indexSymbol} high-momentum breakout completed Target 1 cleanly!`,
-            });
-            setTelegramBroadcastStatus({
-              id: sig.id,
-              message: `🏆 Autonomous Target 1 Win sent to Telegram for ${sig.indexSymbol}!`,
-            });
-            setTimeout(() => setTelegramBroadcastStatus(null), 5000);
-          } catch (err) {
-            console.warn('Auto target 1 win broadcast error', err);
-          }
-        }
-
-        if (sig.targets?.t2Hit && !autoFiredTargetWinRef.current.has(`${sig.id}-T2`)) {
-          autoFiredTargetWinRef.current.add(`${sig.id}-T2`);
-          try {
-            const ptsWon = Number((sig.targets.t2 - sig.entryPrice).toFixed(2));
-            await broadcastTargetWinToTelegram({
-              indexSymbol: sig.indexSymbol,
-              optionSymbol: sig.optionContract?.tradingSymbol || `${sig.indexSymbol} CALL/PUT`,
-              targetName: 'TARGET 2 JACKPOT WIN 🏆',
-              pointsWon: Math.abs(ptsWon),
-              entryPrice: sig.entryPrice,
-              exitPrice: sig.targets.t2,
-              pnlPercent: 64.0,
-              ratio: '1:2.0',
-              rationale: `${sig.indexSymbol} breakout runner reached Target 2 jackpot with high volume expansion!`,
-            });
-            setTelegramBroadcastStatus({
-              id: sig.id,
-              message: `🏆 Autonomous Target 2 Win sent to Telegram for ${sig.indexSymbol}!`,
-            });
-            setTimeout(() => setTelegramBroadcastStatus(null), 5000);
-          } catch (err) {
-            console.warn('Auto target 2 win broadcast error', err);
-          }
-        }
-      });
-    }
-  }, [signals, webhookSettings.telegram.autoBroadcastSignals, webhookSettings.telegram.enabled, broadcastTelegramSignal, webhookSettings.telegram.chatId]);
+  // New signals and their target / SL / square-off updates are sent to
+  // Telegram by the server's live engine (liveSignalEngine.ts), once each.
 
   // Load signals and profiles
-  const loadData = async (indexFilter?: string) => {
+  const loadData = async (indexFilter?: string, silent = false) => {
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       const res = await fetchPriceActionSignals(indexFilter || selectedIndex);
       if (res.success) {
         setSignals(res.signals);
@@ -177,6 +97,9 @@ export const PriceActionSignalsDashboard: React.FC = () => {
 
   useEffect(() => {
     loadData(selectedIndex);
+    // Live premiums and trade status change continuously on the server
+    const timer = setInterval(() => loadData(selectedIndex, true), 15000);
+    return () => clearInterval(timer);
   }, [selectedIndex]);
 
   // Active selected index profile
@@ -557,7 +480,8 @@ export const PriceActionSignalsDashboard: React.FC = () => {
                       const isExpanded = expandedSignalId === sig.id;
                       const isFakeout = sig.confirmationStatus === 'FAKEOUT_FILTERED' || sig.tradeStatus === 'FILTERED_OUT';
                       const isBullish = sig.bias === 'BULLISH';
-                      const isWin = sig.pointsCaptured > 0;
+                      const isOpen = ['ACTIVE', 'TARGET_1_HIT', 'TARGET_2_HIT'].includes(sig.tradeStatus);
+                      const isWin = !isOpen && sig.pointsCaptured > 0;
                       const isSl = sig.tradeStatus === 'STOPLOSS_HIT';
 
                       return (
@@ -625,7 +549,7 @@ export const PriceActionSignalsDashboard: React.FC = () => {
                                 </span>
                               </div>
                               <div className="text-[10px] text-slate-400 mt-0.5">
-                                Confidence: <strong className="text-emerald-400">{sig.confidenceScore}%</strong>
+                                Setup score: <strong className="text-emerald-400">{sig.confidenceScore}/100</strong>
                               </div>
                             </td>
 
@@ -708,10 +632,10 @@ export const PriceActionSignalsDashboard: React.FC = () => {
                                     +{sig.pnlPercent.toFixed(1)}%
                                   </div>
                                 </div>
-                              ) : sig.tradeStatus === 'ACTIVE' ? (
+                              ) : isOpen ? (
                                 <div>
                                   <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 animate-pulse">
-                                    RUNNING (+{sig.pointsCaptured} PTS)
+                                    RUNNING ({sig.pointsCaptured >= 0 ? '+' : ''}{sig.pointsCaptured.toFixed(1)} PTS)
                                   </span>
                                   <div className="text-[10px] text-cyan-400 mt-0.5">
                                     LTP: ₹{sig.currentOptionPrice.toFixed(1)}
@@ -719,7 +643,7 @@ export const PriceActionSignalsDashboard: React.FC = () => {
                                 </div>
                               ) : (
                                 <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/40">
-                                  SL HIT (-{sig.optionStopLossPoints.toFixed(1)} PTS)
+                                  {sig.tradeStatus === 'SQUARED_OFF' ? 'SQUARED OFF' : 'SL HIT'} ({sig.pointsCaptured.toFixed(1)} PTS)
                                 </span>
                               )}
                             </td>
@@ -750,11 +674,11 @@ export const PriceActionSignalsDashboard: React.FC = () => {
                                           indexSymbol: sig.indexSymbol,
                                           optionSymbol: sig.optionSymbol,
                                           targetName: sig.target2?.hit ? 'TARGET 2 WIN 🏆' : 'TARGET 1 HIT 🎯',
-                                          pointsWon: sig.pointsCaptured || 32,
+                                          pointsWon: sig.pointsCaptured,
                                           entryPrice: sig.optionEntryPrice,
-                                          exitPrice: sig.target1?.price,
-                                          pnlPercent: sig.pnlPercent || 35.0,
-                                          ratio: '1:2.0',
+                                          exitPrice: sig.exitPrice ?? sig.currentOptionPrice,
+                                          pnlPercent: sig.pnlPercent,
+                                          ratio: sig.target2?.hit ? sig.target2.ratio : sig.target1.ratio,
                                           rationale: `${sig.indexSymbol} Chanakya Pro breakout hit target with high momentum`,
                                         });
                                         setTelegramBroadcastStatus({

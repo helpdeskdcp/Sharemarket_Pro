@@ -7,9 +7,11 @@ import dotenv from 'dotenv';
 import * as OTPAuth from 'otpauth';
 import crypto from 'crypto';
 import { generateOptionChain, generateCandleHistory, WORLD_CLASS_STRATEGIES, DEFAULT_WEBHOOK_SETTINGS, DEFAULT_ENGINE_SETTINGS } from './src/data/marketData';
-import { AuditLog, DeveloperSettings, GttOrder, BacktestResult, AlertWebhookSettings, Ticker } from './src/types/market';
+import { AuditLog, DeveloperSettings, GttOrder, BacktestResult, AlertWebhookSettings, Ticker, PriceActionSignal } from './src/types/market';
 import { AngelOneLiveStreamer, EXCHANGE_SYMBOL_MAP } from './src/services/angelOneLiveService';
 import { PriceActionStrategyEngine, INITIAL_PRICE_ACTION_SIGNALS } from './src/services/priceActionEngine';
+import { getAngelCandles, AngelCandleInterval } from './src/services/angelOneApi';
+import { LiveSignalEngine, SignalEvent } from './src/services/liveSignalEngine';
 
 dotenv.config();
 
@@ -357,24 +359,10 @@ app.get('/api/market/option-chain', (req: Request, res: Response) => {
   res.json({ success: true, data: optionChain });
 });
 
-// "yyyy-MM-dd HH:mm" in IST, as SmartAPI getCandleData expects
-function formatAngelCandleDate(ms: number): string {
-  return new Date(ms + 5.5 * 60 * 60 * 1000).toISOString().slice(0, 16).replace('T', ' ');
-}
-
-// SmartAPI's historical endpoint allows only a few calls per second per
-// account (shared with any other app on the same account), so calls are
-// queued with spacing and results cached; a failed refresh serves the last
-// good Angel One candles instead of dropping to the Yahoo fallback.
+// Chart candles are cached; a failed refresh serves the last good Angel One
+// candles instead of dropping to the Yahoo fallback. Requests share the
+// account-wide rate-limit queue in angelOneApi.ts with the signal engine.
 const angelCandleCache = new Map<string, { at: number; candles: any[] }>();
-let angelCandleQueue: Promise<unknown> = Promise.resolve();
-
-function queueAngelCandleCall<T>(fn: () => Promise<T>): Promise<T> {
-  const run = angelCandleQueue.then(fn, fn);
-  const spacing = () => new Promise(resolve => setTimeout(resolve, 400));
-  angelCandleQueue = run.then(spacing, spacing);
-  return run;
-}
 
 async function fetchAngelOneCandles(symbol: string, timeframe: string): Promise<any[] | null> {
   const key = `${symbol.toUpperCase()}|${timeframe}|${EXCHANGE_SYMBOL_MAP[symbol.toUpperCase()]?.token || ''}`;
@@ -382,7 +370,7 @@ async function fetchAngelOneCandles(symbol: string, timeframe: string): Promise<
   const ttl = timeframe === '1D' || timeframe === '1W' ? 60_000 : 15 * 60_000;
   if (cached && Date.now() - cached.at < ttl) return cached.candles;
 
-  const candles = await queueAngelCandleCall(() => requestAngelOneCandles(symbol, timeframe));
+  const candles = await requestAngelOneCandles(symbol, timeframe);
   if (candles) {
     angelCandleCache.set(key, { at: Date.now(), candles });
     return candles;
@@ -397,7 +385,7 @@ async function requestAngelOneCandles(symbol: string, timeframe: string): Promis
   if (!meta || !auth || !meta.token || !['NSE', 'BSE', 'MCX'].includes(meta.exchange)) return null;
 
   const day = 24 * 60 * 60 * 1000;
-  const spec: Record<string, { interval: string; days: number; intraday: boolean }> = {
+  const spec: Record<string, { interval: AngelCandleInterval; days: number; intraday: boolean }> = {
     '1D': { interval: 'FIVE_MINUTE', days: 4, intraday: true },
     '1W': { interval: 'FIFTEEN_MINUTE', days: 7, intraday: true },
     '1M': { interval: 'ONE_DAY', days: 31, intraday: false },
@@ -406,55 +394,29 @@ async function requestAngelOneCandles(symbol: string, timeframe: string): Promis
   const { interval, days, intraday } = spec[timeframe] || spec['1D'];
   const now = Date.now();
 
-  try {
-    const request = () => fetch('https://apiconnect.angelone.in/rest/secure/angelbroking/historical/v1/getCandleData', {
-      method: 'POST',
-      headers: angelOneHeaders(auth.apiKey, { 'Authorization': `Bearer ${auth.jwtToken}` }),
-      body: JSON.stringify({
-        exchange: meta.exchange,
-        symboltoken: meta.token,
-        interval,
-        fromdate: formatAngelCandleDate(now - days * day),
-        todate: formatAngelCandleDate(now),
-      }),
-    });
-    let res = await request();
-    if (res.status === 403) {
-      // "exceeding access rate" -- the quota is per account, so back off once
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      res = await request();
-    }
-    if (!res.ok) {
-      console.warn(`[AngelOne] candles ${symbol} ${timeframe} HTTP ${res.status}`);
-      return null;
-    }
-    const json: any = await res.json().catch(() => null);
-    let rows: any[] = Array.isArray(json?.data) ? json.data : [];
-    if (rows.length === 0) return null;
+  let rows = await getAngelCandles(auth, meta.exchange, meta.token, interval, now - days * day, now);
+  if (!rows || rows.length === 0) return null;
 
-    // 1D shows only the latest session present in the window
-    if (timeframe === '1D') {
-      const lastDate = String(rows[rows.length - 1][0]).slice(0, 10);
-      rows = rows.filter(r => String(r[0]).startsWith(lastDate));
-    }
-
-    const candles = rows.map(([ts, o, h, l, c, v]) => {
-      const d = new Date(ts);
-      return {
-        time: intraday
-          ? d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Kolkata' })
-          : d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', timeZone: 'Asia/Kolkata' }),
-        open: Number(o),
-        high: Number(h),
-        low: Number(l),
-        close: Number(c),
-        volume: Number(v) || 0,
-      };
-    });
-    return candles.length > 5 ? withEma20(candles) : null;
-  } catch {
-    return null;
+  // 1D shows only the latest session present in the window
+  if (timeframe === '1D') {
+    const lastDate = rows[rows.length - 1].dateKey;
+    rows = rows.filter(r => r.dateKey === lastDate);
   }
+
+  const candles = rows.map(r => {
+    const d = new Date(r.ts);
+    return {
+      time: intraday
+        ? d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Kolkata' })
+        : d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', timeZone: 'Asia/Kolkata' }),
+      open: r.open,
+      high: r.high,
+      low: r.low,
+      close: r.close,
+      volume: r.volume,
+    };
+  });
+  return candles.length > 5 ? withEma20(candles) : null;
 }
 
 function withEma20(candles: any[]): any[] {
@@ -986,6 +948,40 @@ async function autoLoginAngelOne(reason: string) {
 angelOneStreamer.onSessionExpired(() => autoLoginAngelOne('session expired'));
 setInterval(() => autoLoginAngelOne('scheduled refresh'), 6 * 60 * 60 * 1000);
 
+// Live option signal engine. New signals and their target / SL / square-off
+// updates are sent to Telegram from here, once, with the real premiums.
+async function telegramAutoSend(html: string, logDetails: string) {
+  const tg = devSettings.webhooks?.telegram;
+  if (!tg?.enabled || !tg.autoBroadcastSignals) return;
+  const result = await sendTelegramBroadcast(html);
+  auditLogs.unshift({
+    id: `log-${Date.now()}`,
+    timestamp: new Date().toISOString(),
+    user: 'chanakya_engine',
+    action: 'CHANAKYA_SIGNAL_TELEGRAM_BROADCAST',
+    category: 'ALERT',
+    status: result.success ? 'SUCCESS' : 'WARNING',
+    details: `${logDetails} (${result.mode} mode)${result.error ? ` - ${result.error}` : ''}`,
+    ipAddress: '127.0.0.1',
+  });
+}
+
+const liveSignalEngine = new LiveSignalEngine(angelOneStreamer, priceActionEngine, {
+  onNewSignal: signal => {
+    broadcastSignalIds.add(signal.id);
+    telegramAutoSend(
+      formatPriceActionSignalTelegramHtml(signal, devSettings.webhooks?.telegram?.channelName),
+      `New signal ${signal.optionSymbol} @ ₹${signal.optionEntryPrice}`
+    );
+  },
+  onSignalEvent: (signal, event) => {
+    telegramAutoSend(
+      formatSignalUpdateTelegramHtml(signal, event, devSettings.webhooks?.telegram?.channelName),
+      `${event} ${signal.optionSymbol} @ ₹${signal.exitPrice ?? signal.currentOptionPrice}`
+    );
+  },
+});
+
 // Developer Settings Config (GET & POST)
 // This endpoint is called automatically for EVERY visitor on app load
 // (see TradingContext.tsx) to pick up executionMode/webhooks/engines
@@ -1403,10 +1399,10 @@ function formatPriceActionSignalTelegramHtml(signal: any, channelName?: string):
 <b>${signalEmoji} BUY ${lv.optionSymbol}</b>
 ━━━━━━━━━━━━━━━━━━━━━
 📊 <b>Underlying:</b> ${lv.indexSymbol}${lv.spot ? ` @ ${lv.spot.toFixed(2)}` : ''}
-🎟 <b>Strike:</b> ${lv.strike} ${lv.optionType} (${isCall ? 'Call' : 'Put'})
+🎟 <b>Strike:</b> ${lv.strike} ${lv.optionType} (${isCall ? 'Call' : 'Put'})${signal.optionExpiry ? ` | Expiry ${signal.optionExpiry}` : ''}${signal.lotSize ? ` | Lot ${signal.lotSize}` : ''}
 🎯 <b>Signal Type:</b> ${patternLabel}${lv.keyLevel ? ` @ ${lv.keyLevel}` : ''}
-💎 <b>Confidence:</b> ${lv.confidence ? `${lv.confidence.toFixed(1)}%` : '-'}
-⚡ <b>Volume:</b> ${signal.volumeMultiplier ? `${signal.volumeMultiplier}x average` : '-'}
+📐 <b>Setup Score:</b> ${lv.confidence ? `${Math.round(lv.confidence)}/100 (rule-based, not a win probability)` : '-'}
+⚡ <b>Volume:</b> ${signal.volumeMultiplier ? `${signal.volumeMultiplier}x the 20-candle average` : '-'}
 
 <b>📍 OPTION PREMIUM LEVELS:</b>
 • <b>Entry:</b> ${rupees(lv.entry)}
@@ -1419,6 +1415,39 @@ ${signal.rationale || 'High-volume breakout confirmed across key structural leve
 ━━━━━━━━━━━━━━━━━━━━━
 🕒 <i>Time: ${new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })} IST | ${channelName || devSettings.webhooks?.telegram?.channelName || 'Chanakya Pro Broadcast'}</i>
 ⚠️ <i>SEBI Statutory Notice: We are NOT SEBI registered. Dispatched for algorithmic simulation & research. Options/Futures carry high capital risk.</i>
+`.trim();
+}
+
+// Follow-up for a live-engine signal: target / stop loss / square-off, with
+// the actual premium at the moment it happened.
+function formatSignalUpdateTelegramHtml(signal: PriceActionSignal, event: SignalEvent, channelName?: string): string {
+  const entry = signal.optionEntryPrice;
+  const ltp = signal.exitPrice ?? signal.currentOptionPrice;
+  const pts = ltp - entry;
+  const pct = (pts / entry) * 100;
+  const signed = (n: number, d = 2) => `${n >= 0 ? '+' : ''}${n.toFixed(d)}`;
+  const headline: Record<SignalEvent, string> = {
+    T1: `🎯 TARGET 1 (${signal.target1.ratio}) HIT`,
+    T2: `🎯🎯 TARGET 2 (${signal.target2.ratio}) HIT`,
+    T4: `🏆 FINAL TARGET (${signal.target4.ratio}) HIT - TRADE CLOSED`,
+    SL: pts >= 0 ? '🟡 TRAILING STOP HIT - TRADE CLOSED' : '🔴 STOP LOSS HIT - TRADE CLOSED',
+    SQUARED_OFF: '⏹ SQUARED OFF AT SESSION END - TRADE CLOSED',
+  };
+  const followUp: Partial<Record<SignalEvent, string>> = {
+    T1: `Stop loss moved to cost ₹${entry.toFixed(2)}.`,
+    T2: `Stop loss trailed to Target 1 ₹${signal.target1.price.toFixed(2)}.`,
+  };
+
+  return `
+<b>${headline[event]}</b>
+<b>${signal.optionSymbol}</b>
+━━━━━━━━━━━━━━━━━━━━━
+• <b>Entry:</b> ₹${entry.toFixed(2)}
+• <b>${signal.exitPrice !== undefined ? 'Exit' : 'Now'}:</b> ₹${ltp.toFixed(2)}
+• <b>Result:</b> ${signed(pts)} pts (${signed(pct, 1)}%)${signal.lotSize ? ` = ₹${signed(pts * signal.lotSize, 0)} per lot` : ''}
+${followUp[event] ? `• ${followUp[event]}
+` : ''}━━━━━━━━━━━━━━━━━━━━━
+🕒 <i>${new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })} IST | ${channelName || devSettings.webhooks?.telegram?.channelName || 'Chanakya Pro Broadcast'}</i>
 `.trim();
 }
 
@@ -1489,13 +1518,20 @@ app.post('/api/telegram/config', requireAdmin, (req: Request, res: Response) => 
 // when a live signal fires (see TradingContext.tsx) -- never reads or
 // returns the bot token to the caller, only uses it server-side.
 app.post('/api/telegram/broadcast-signal', async (req: Request, res: Response) => {
-  const { signal, customChannel, customBotToken } = req.body;
-  if (!signal) {
-    return res.status(400).json({ success: false, error: 'Chanakya Pro signal data required' });
+  const { customChannel, customBotToken } = req.body;
+  const requested = req.body?.signal;
+  if (!requested?.id) {
+    return res.status(400).json({ success: false, error: 'Chanakya Pro signal id required' });
   }
   // The built-in sample signals (stale prices) must never reach the channel.
-  if (DEMO_SIGNAL_IDS.has(signal.id)) {
+  if (DEMO_SIGNAL_IDS.has(requested.id)) {
     return res.status(409).json({ success: false, skipped: true, error: 'Demo/sample signal - not broadcast' });
+  }
+  // Only signals the live engine generated can be sent, and always the
+  // server's copy -- the request body is never trusted for trade levels.
+  const signal = priceActionEngine.getSignalById(String(requested.id));
+  if (!signal) {
+    return res.status(404).json({ success: false, error: 'Unknown signal - only live engine signals can be broadcast' });
   }
   if (!priceActionSignalLevels(signal)) {
     return res.status(422).json({ success: false, error: 'Signal is missing strike, CE/PE, entry or stop loss - not broadcast' });
@@ -1525,7 +1561,7 @@ app.post('/api/telegram/broadcast-signal', async (req: Request, res: Response) =
     action: 'CHANAKYA_SIGNAL_TELEGRAM_BROADCAST',
     category: 'ALERT',
     status: dispatchResult.success ? 'SUCCESS' : 'WARNING',
-    details: `Chanakya Signal [${signal.action} ${signal.indexSymbol} @ ₹${signal.entryPrice}] broadcasted to Telegram channel ${targetChat} (${dispatchResult.mode} mode)${dispatchResult.error ? ` - Notice: ${dispatchResult.error}` : ''}`,
+    details: `Chanakya Signal [${signal.action} ${signal.optionSymbol} @ ₹${signal.optionEntryPrice}] broadcasted to Telegram channel ${targetChat} (${dispatchResult.mode} mode)${dispatchResult.error ? ` - Notice: ${dispatchResult.error}` : ''}`,
     ipAddress: req.ip || '127.0.0.1',
   });
 
@@ -1543,7 +1579,9 @@ app.post('/api/telegram/broadcast-signal', async (req: Request, res: Response) =
 });
 
 // Not admin-gated: same reasoning as broadcast-signal above.
-app.post('/api/telegram/broadcast-target-win', async (req: Request, res: Response) => {
+// Admin-only: the live engine posts real target/SL updates itself; this
+// manual route takes free-form numbers, so it must not be open to visitors.
+app.post('/api/telegram/broadcast-target-win', requireAdmin, async (req: Request, res: Response) => {
   const { winData, customChannel, customBotToken } = req.body;
   if (!winData) {
     return res.status(400).json({ success: false, error: 'Target win data required' });
@@ -1824,6 +1862,7 @@ app.get('/api/price-action/signals', (req: Request, res: Response) => {
     signals,
     statistics,
     profiles,
+    engine: liveSignalEngine.getStatus(),
     timestamp: new Date().toISOString(),
   });
 });
@@ -1886,20 +1925,11 @@ app.post('/api/price-action/calibrate', (req: Request, res: Response) => {
   });
 });
 
-// Evaluate live bar for S/R Breakout / Reversal or Trap
+// Signals are generated server-side by the live engine (liveSignalEngine.ts)
+// from Angel One candles and option-chain premiums; clients can no longer
+// submit candles to create signals.
 app.post('/api/price-action/evaluate', (req: Request, res: Response) => {
-  const { indexSymbol = 'NIFTY 50', currentPrice, candle } = req.body || {};
-  if (!currentPrice || !candle) {
-    return res.status(400).json({ success: false, error: 'currentPrice and candle required' });
-  }
-
-  const signal = priceActionEngine.evaluateLiveCandle(indexSymbol, currentPrice, candle);
-  res.json({
-    success: true,
-    signal,
-    allSignals: priceActionEngine.getSignals(indexSymbol),
-    statistics: priceActionEngine.getEngineStatistics(indexSymbol),
-  });
+  res.status(410).json({ success: false, error: 'Signals are generated server-side from live Angel One data' });
 });
 
 // -------------------------------------------------------------
@@ -1967,6 +1997,9 @@ async function startServer() {
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`ShareMarket Pro trading server with Angel One Live WebSocket running on http://0.0.0.0:${PORT}`);
     autoLoginAngelOne('startup');
+    liveSignalEngine.start();
+    // Signals restored from disk were already sent before the restart.
+    priceActionEngine.getSignals().forEach(s => broadcastSignalIds.add(s.id));
   });
 }
 

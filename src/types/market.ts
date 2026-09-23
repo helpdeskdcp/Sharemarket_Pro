@@ -373,6 +373,7 @@ export type SignalTradeStatus =
   | 'TARGET_4_HIT'
   | 'ADAPTIVE_TARGET_HIT'
   | 'STOPLOSS_HIT'
+  | 'SQUARED_OFF'
   | 'FILTERED_OUT';
 
 export interface SignalTargetSpec {
@@ -425,6 +426,15 @@ export interface PriceActionSignal {
   trapDetails?: string;
   rationale: string;
   marathiRationale: string;
+  // Set on signals from the live engine (liveSignalEngine.ts)
+  source?: 'LIVE_ENGINE';
+  optionToken?: string;
+  optionExchange?: string;
+  optionExpiry?: string;
+  lotSize?: number;
+  initialStopLoss?: number;
+  exitPrice?: number;
+  closedAt?: string;
 }
 
 export interface IndexEdgeProfile {
